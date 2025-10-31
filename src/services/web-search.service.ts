@@ -270,6 +270,38 @@ Description: ${result.snippet}`;
         });
         clearTimeout(timeoutId);
 
+        // Handle HTTP 300 (Multiple Choices) - manually follow Location header if present
+        if (response.status === 300) {
+          const location = response.headers.get('Location');
+          if (location) {
+            // Resolve relative URLs
+            const redirectUrl = new URL(location, cleanUrl).href;
+            console.log(`[WebSearch] HTTP 300 redirect detected, following Location header to: ${redirectUrl}`);
+            
+            // Retry with the redirect URL (with a new timeout)
+            const redirectController = new AbortController();
+            const redirectTimeoutId = setTimeout(() => redirectController.abort(), 15000);
+            
+            try {
+              response = await fetch(redirectUrl, {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                  'Accept-Language': 'en-US,en;q=0.9'
+                },
+                signal: redirectController.signal,
+                redirect: 'follow'
+              });
+              clearTimeout(redirectTimeoutId);
+            } catch (redirectError: any) {
+              clearTimeout(redirectTimeoutId);
+              throw redirectError;
+            }
+          } else {
+            throw new Error(`HTTP 300: Multiple Choices - No Location header provided`);
+          }
+        }
+
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
