@@ -1,0 +1,5 @@
+# CQL Studio Server - Cursor Rules
+
+## Environment Variables
+
+All environment variables MUST be prefixed with `CQL_STUDIO_SERVER_`. When adding new variables, update examples and documentation

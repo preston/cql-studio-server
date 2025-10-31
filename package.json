@@ -1,0 +1,28 @@
+{
+  "name": "cql-studio-server",
+  "version": "1.0.1",
+  "description": "Express ESM server for CQL Studio backend services and MCP tool orchestration",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "watch": "tsx watch src/server.ts",
+    "clean": "rm -rf dist"
+  },
+  "author": "Preston Lee",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "cheerio": "^1.1.2",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.9.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
