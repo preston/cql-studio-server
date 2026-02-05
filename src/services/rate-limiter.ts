@@ -1,6 +1,20 @@
 // Author: Preston Lee
 
 /**
+ * Error thrown when a rate limit is exceeded (local or remote).
+ * MCP routes can detect this and return HTTP 429 with a structured body for the client.
+ */
+export class RateLimitError extends Error {
+  readonly code = 'RATE_LIMITED' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'RateLimitError';
+    Object.setPrototypeOf(this, RateLimitError.prototype);
+  }
+}
+
+/**
  * Rate limiter service for controlling request rates
  * Implements token bucket algorithm for rate limiting
  */
@@ -35,7 +49,9 @@ export class RateLimiter {
     const refillRate = this.refillRate.get(operation);
 
     if (!maxTokens || !refillRate) {
-      throw new Error(`Rate limiter not configured for operation: ${operation}`);
+      const msg = `Rate limiter not configured for operation: ${operation}`;
+      console.error('[RateLimiter]', msg);
+      throw new Error(msg);
     }
 
     // Refill tokens based on time elapsed
@@ -77,9 +93,22 @@ export class RateLimiter {
   }
 
   /**
-   * Get remaining tokens for an operation
+   * Get remaining tokens for an operation (refills based on elapsed time before returning).
    */
   getRemainingTokens(operation: string): number {
+    const maxTokens = this.maxTokens.get(operation);
+    const refillRate = this.refillRate.get(operation);
+    if (!maxTokens || !refillRate) return 0;
+    const now = Date.now();
+    const lastRefill = this.lastRefill.get(operation) || now;
+    const elapsed = now - lastRefill;
+    if (elapsed > 0) {
+      const currentTokens = this.tokens.get(operation) || 0;
+      const tokensToAdd = (elapsed / 1000) * refillRate;
+      const newTokens = Math.min(maxTokens, currentTokens + tokensToAdd);
+      this.tokens.set(operation, newTokens);
+      this.lastRefill.set(operation, now);
+    }
     const tokens = this.tokens.get(operation) || 0;
     return Math.max(0, Math.floor(tokens));
   }

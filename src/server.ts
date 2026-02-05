@@ -2,10 +2,23 @@
 
 import express from 'express';
 import cors from 'cors';
-import { mcpRouter } from './routes/mcp.js';
+import { mcpRouter } from './mcp/index.js';
 
 const app = express();
 const PORT = process.env.CQL_STUDIO_SERVER_PORT || 3003;
+const isDev = (process.env.CQL_STUDIO_SERVER_NODE_ENV || 'development') === 'development';
+
+/**
+ * Wraps async route handlers so rejections are passed to Express error middleware.
+ * Express does not catch async errors by default; this ensures they are handled.
+ */
+function asyncHandler(
+  fn: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<void>
+): express.RequestHandler {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
 
 // CORS configuration - allow all origins
 const corsOptions = {
@@ -32,14 +45,18 @@ app.get('/health', (req, res) => {
 // MCP routes
 app.use('/', mcpRouter);
 
-// Error handling middleware
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Error:', err);
-  res.status(500).json({ error: err.message || 'Internal server error' });
+// Error handling middleware (must have 4 args for Express to treat as error handler)
+app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = err?.message || 'Internal server error';
+  console.error(`[Error] ${req.method} ${req.path} - ${message}`, isDev && err?.stack ? err.stack : '');
+  if (!res.headersSent) {
+    res.status(500).json({ error: message });
+  }
 });
 
 // 404 handler
 app.use((req, res) => {
+  console.warn(`${new Date().toISOString()} - 404 ${req.method} ${req.path}`);
   res.status(404).json({ error: 'Not found' });
 });
 
