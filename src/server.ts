@@ -3,6 +3,7 @@
 import express from 'express';
 import cors from 'cors';
 import { mcpRouter } from './mcp/index.js';
+import { ollamaProxyRouter } from './ollama/proxy.js';
 
 const app = express();
 const PORT = process.env.CQL_STUDIO_SERVER_PORT || 3003;
@@ -44,6 +45,9 @@ app.get('/health', (req, res) => {
 
 // MCP routes
 app.use('/', mcpRouter);
+
+// Ollama proxy (GET /api/ollama/tags, POST /api/ollama/chat)
+app.use('/api/ollama', ollamaProxyRouter);
 
 // Error handling middleware (must have 4 args for Express to treat as error handler)
 app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
