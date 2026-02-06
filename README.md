@@ -180,7 +180,11 @@ services:
       - CQL_STUDIO_SERVER_CORS_ORIGIN=http://localhost:4200
 ```
 
+## Attribution
+
+Copyright © 2025+ Preston Lee. All rights reserved.
+
 ## License
 
-Apache-2.0
+Released under the Apache 2.0 license.
 
