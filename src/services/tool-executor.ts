@@ -1,6 +1,6 @@
 // Author: Preston Lee
 
-import { WebSearchService } from './web-search.service.js';
+import { WebSearchService } from './web-search/index.js';
 import { SearXNGService } from './searxng.service.js';
 
 export interface MCPTool {
