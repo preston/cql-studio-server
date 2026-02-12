@@ -147,7 +147,7 @@ export class ToolExecutor {
       },
       {
         name: 'searxng_search_then_fetch',
-        description: 'Run a SearXNG search and then fetch full page content for the top results in one call. Use when you need both search and full text of the first few results. Returns an array of { url, title, snippet, content } (content is formatted body text). Consumes 1 search + N fetch rate limit tokens (N = max_results_to_fetch, default 3, max 5). Requires searxng_base_url and query.',
+        description: 'Run a web search using the provided SearXNG server and then fetch full page content for the top results in one call. Use when you need both search and full text of the first few results. Returns an array of { url, title, snippet, content } (content is formatted body text). Consumes 1 search + N fetch rate limit tokens (N = max_results_to_fetch, default 3, max 5). Requires searxng_base_url and query.',
         parameters: {
           type: 'object',
           properties: {
@@ -199,7 +199,7 @@ export class ToolExecutor {
       },
       {
         name: 'batch_fetch',
-        description: 'Fetch multiple URLs in one call and return structured results for each. Use when you already have a list of URLs (e.g. from searxng_search). Returns array of { url, title, contentLength, textContent (max 10000 chars), hasMoreContent }. Max 10 URLs per call. Each URL consumes one fetch rate limit token (20/min).',
+        description: 'Fetch multiple web URLs in one call and return structured results for each. Use when you already have a list of URLs (e.g. from searxng_search). Returns array of { url, title, contentLength, textContent (max 10000 chars), hasMoreContent }. Max 10 URLs per call. Each URL consumes one fetch rate limit token (20/min).',
         parameters: {
           type: 'object',
           properties: {
