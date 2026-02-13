@@ -8,6 +8,8 @@ export interface MCPTool {
   description: string;
   /** User-facing message shown while the tool is executing */
   statusMessage?: string;
+  /** If true, tool is read-only and allowed in Plan Mode. If false, tool modifies state and is blocked. */
+  allowedInPlanMode?: boolean;
   parameters: {
     type: string;
     properties: Record<string, any>;
@@ -34,6 +36,7 @@ export class ToolExecutor {
         name: 'fetch_content',
         description: 'Fetches and parses content from a webpage and returns a single formatted string for LLM context. Use this when you need to inject page content directly into your response or context. Includes intelligent text extraction, rate limiting (20 requests per minute), and removes ads and irrelevant content. Return value: a single string with title, URL, and body text (newline-separated). Supports HTML and plain text URLs.',
         statusMessage: 'Fetching content...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -49,6 +52,7 @@ export class ToolExecutor {
         name: 'fetch_url',
         description: 'Download and parse web content from a URL and return structured metadata plus text. Use this when you need individual fields (title, url, snippet length, hasMoreContent) or to check if content was truncated. Returns an object: { url, title, contentLength, textContent (max 10000 chars), hasMoreContent }. Rate limiting: 20 requests per minute. Supports HTML and plain text.',
         statusMessage: 'Fetching URL...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -64,6 +68,7 @@ export class ToolExecutor {
         name: 'searxng_search',
         description: 'Perform an anonymous web search via a user-configured SearXNG instance (no API key required). Returns an object: { query, resultsCount, results: [{ title, url, snippet }] }. Use when you need structured search results to process or filter. Requires searxng_base_url from the user. Rate limited (30 requests per minute). Optional: categories, language, time_range, safesearch, max_results (1–50).',
         statusMessage: 'Searching web (SearXNG)...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -112,6 +117,7 @@ export class ToolExecutor {
         name: 'searxng_search_formatted',
         description: 'Perform an anonymous web search via a SearXNG instance and return a single formatted string for LLM context (no API key required). Use when you want to inject search results directly into your response. Return value: a single string with numbered entries (title, URL, description per result). Requires searxng_base_url. Rate limited (30 requests per minute). Same optional parameters as searxng_search (categories, language, time_range, safesearch, max_results 1–50).',
         statusMessage: 'Searching web (SearXNG)...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -155,6 +161,7 @@ export class ToolExecutor {
         name: 'searxng_search_then_fetch',
         description: 'Run a SearXNG search and then fetch full page content for the top results in one call. Use when you need both search and full text of the first few results. Returns an array of { url, title, snippet, content } (content is formatted body text). Consumes 1 search + N fetch rate limit tokens (N = max_results_to_fetch, default 3, max 5). Requires searxng_base_url and query.',
         statusMessage: 'Searching and fetching...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -182,6 +189,7 @@ export class ToolExecutor {
         name: 'searxng_search_then_fetch_formatted',
         description: 'Run a SearXNG search and fetch full content for the top results, then return a single formatted string for LLM context. Same as searxng_search_then_fetch but returns one string with all results concatenated. Use for "search and read" in one step. max_results_to_fetch default 3, max 5.',
         statusMessage: 'Searching and fetching...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -209,6 +217,7 @@ export class ToolExecutor {
         name: 'batch_fetch',
         description: 'Fetch multiple URLs in one call and return structured results for each. Use when you already have a list of URLs (e.g. from searxng_search). Returns array of { url, title, contentLength, textContent (max 10000 chars), hasMoreContent }. Max 10 URLs per call. Each URL consumes one fetch rate limit token (20/min).',
         statusMessage: 'Fetching URLs...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -225,6 +234,7 @@ export class ToolExecutor {
         name: 'fetch_metadata',
         description: 'Lightweight fetch: get final URL (after redirects), status code, content-type, and optional title/description/image from HTML meta tags (Open Graph, Twitter Card). Use to check if a link is valid, get preview card data, or decide whether to run fetch_content. Does not download full body (reads only first 150KB for meta). Rate limited (20/min, same as fetch).',
         statusMessage: 'Fetching metadata...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -240,6 +250,7 @@ export class ToolExecutor {
         name: 'fetch_feed',
         description: 'Fetch and parse an RSS or Atom feed. Returns feed title, link, description, and list of entries (title, link, summary, date). Use for blogs, news, and "what\'s new" discovery. Rate limited (20/min, same as fetch).',
         statusMessage: 'Fetching feed...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -255,6 +266,7 @@ export class ToolExecutor {
         name: 'fetch_content_as_markdown',
         description: 'Fetch a webpage and return its main content as Markdown (headings, lists, links preserved). Use when you want structured Markdown instead of plain text. Return value: single string with title, URL, and Markdown body. Rate limited (20/min, same as fetch).',
         statusMessage: 'Fetching as Markdown...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -270,6 +282,7 @@ export class ToolExecutor {
         name: 'extract_links',
         description: 'Fetch a page and return all outbound links. Use for discovery or crawling. Returns array of { href, text }. Optionally restrict to same domain only. Rate limited (20/min).',
         statusMessage: 'Extracting links...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -289,6 +302,7 @@ export class ToolExecutor {
         name: 'fetch_sitemap',
         description: 'Fetch and parse a sitemap.xml (or sitemap index). Returns either urlset (list of page URLs with optional lastmod, changefreq, priority) or sitemapindex (list of child sitemap URLs). Use expand_index to follow an index and aggregate URLs from up to 10 child sitemaps. Rate limited (20/min; expanding an index consumes 1 + N tokens).',
         statusMessage: 'Fetching sitemap...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {
@@ -308,6 +322,7 @@ export class ToolExecutor {
         name: 'get_rate_limit_status',
         description: 'Return remaining rate limit tokens for fetch and search. Use to decide whether to batch requests or wait. No parameters. Does not consume any tokens.',
         statusMessage: 'Checking rate limits...',
+        allowedInPlanMode: true,
         parameters: {
           type: 'object',
           properties: {},
