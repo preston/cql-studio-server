@@ -1,7 +1,7 @@
 {
   "name": "cql-studio-server",
-  "version": "1.2.2",
-  "description": "Express ESM server for CQL Studio backend services and MCP tool orchestration",
+  "version": "1.2.3",
+  "description": "CQL Studio backend services and MCP tool orchestration, provided as an Express server using ESM modules",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
@@ -24,7 +24,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
-    "@types/node": "^25.3.3",
+    "@types/node": "^25.3.5",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
