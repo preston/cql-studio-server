@@ -46,7 +46,7 @@ app.get('/health', (req, res) => {
 // MCP routes
 app.use('/', mcpRouter);
 
-// Ollama proxy (GET /api/ollama/tags, POST /api/ollama/chat)
+// Ollama proxy: GET /api/ollama/tags, /version; POST /api/ollama/show, /chat, /generate, /embeddings
 app.use('/api/ollama', ollamaProxyRouter);
 
 // Error handling middleware (must have 4 args for Express to treat as error handler)

@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "watch": "tsx watch src/server.ts",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "node --test --import tsx tests/ollama-proxy.test.ts"
   },
   "author": "Preston Lee",
   "license": "Apache-2.0",
