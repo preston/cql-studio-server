@@ -1,6 +1,6 @@
 {
   "name": "cql-studio-server",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "CQL Studio backend services and MCP tool orchestration, provided as an Express server using ESM modules",
   "type": "module",
   "main": "dist/server.js",
@@ -17,7 +17,7 @@
     "cheerio": "^1.2.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "fast-xml-parser": "^5.5.1",
+    "fast-xml-parser": "^5.5.3",
     "node-fetch": "^3.3.2",
     "rss-parser": "^3.13.0",
     "turndown": "^7.2.2"
