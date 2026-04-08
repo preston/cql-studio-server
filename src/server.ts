@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import { mcpRouter } from './mcp/index.js';
 import { ollamaProxyRouter } from './ollama/proxy.js';
+import { vsacFhirProxyRouter, vsacSiteProxyRouter } from './vsac/proxy.js';
 
 const app = express();
 const PORT = process.env.CQL_STUDIO_SERVER_PORT || 3003;
@@ -48,6 +49,10 @@ app.use('/', mcpRouter);
 
 // Ollama proxy: GET /api/ollama/tags, /version; POST /api/ollama/show, /chat, /generate, /embeddings
 app.use('/api/ollama', ollamaProxyRouter);
+
+// VSAC: browser CORS bypass — forward UMLS Basic auth from client (never logged)
+app.use('/api/vsac/fhir', vsacFhirProxyRouter);
+app.use('/api/vsac/site', vsacSiteProxyRouter);
 
 // Error handling middleware (must have 4 args for Express to treat as error handler)
 app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
