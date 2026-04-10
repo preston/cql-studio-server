@@ -17,7 +17,7 @@
     "cheerio": "^1.2.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "fast-xml-parser": "^5.5.10",
+    "fast-xml-parser": "^5.5.11",
     "node-fetch": "^3.3.2",
     "rss-parser": "^3.13.0",
     "turndown": "^7.2.4"
@@ -25,7 +25,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
-    "@types/node": "^25.5.2",
+    "@types/node": "^25.6.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }
