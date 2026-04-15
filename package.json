@@ -17,7 +17,7 @@
     "cheerio": "^1.2.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "fast-xml-parser": "^5.5.11",
+    "fast-xml-parser": "^5.5.12",
     "node-fetch": "^3.3.2",
     "rss-parser": "^3.13.0",
     "turndown": "^7.2.4"
