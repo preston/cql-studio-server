@@ -5,6 +5,7 @@ Express ESM server for CQL Studio backend services and MCP (Model Context Protoc
 ## Features
 
 - MCP protocol implementation for tool execution
+- Ollama API proxy for browser CORS bypass (client-supplied base URL)
 - Web search via SearXNG (no API key; proxy to your own or public instance)
 - Web content fetching and parsing
 - CORS-enabled for webapp communication
@@ -45,6 +46,31 @@ Environment variables (in `.env`):
 - `CQL_STUDIO_SERVER_NODE_ENV` - Environment mode (development/production)
 - `CQL_STUDIO_SERVER_CORS_ORIGIN` - Allowed CORS origin (default: http://localhost:4200)
 - `CQL_STUDIO_SERVER_LOG_LEVEL` - Logging level (default: info)
+
+## Ollama Proxy
+
+The server proxies a fixed set of [Ollama native API](https://docs.ollama.com/api) endpoints so browser clients can reach a user-configured Ollama instance without CORS issues. The upstream base URL is supplied per request — no server-side Ollama configuration is required.
+
+**Base URL:** `X-Ollama-Base-URL` header or `?ollamaBaseUrl=` query parameter (must be `http://` or `https://`).
+
+| Method | Path | Upstream |
+|--------|------|----------|
+| GET | `/api/ollama/tags` | `/api/tags` |
+| GET | `/api/ollama/version` | `/api/version` |
+| GET | `/api/ollama/ps` | `/api/ps` |
+| POST | `/api/ollama/show` | `/api/show` |
+| POST | `/api/ollama/chat` | `/api/chat` |
+| POST | `/api/ollama/generate` | `/api/generate` |
+| POST | `/api/ollama/embed` | `/api/embed` |
+| POST | `/api/ollama/embeddings` | `/api/embeddings` (legacy) |
+
+Request bodies are forwarded unchanged. Streaming responses (`stream: true`) are piped through for chat and generate. Unknown endpoints return 404.
+
+Example:
+
+```bash
+curl "http://localhost:3003/api/ollama/version?ollamaBaseUrl=http://localhost:11434"
+```
 
 ## MCP Endpoints
 

@@ -7,6 +7,11 @@ const router = express.Router();
 
 const CQL_STUDIO_SERVER_OLLAMA_BASE_URL = 'x-ollama-base-url';
 
+const ALLOWED_GET = new Set(['tags', 'version', 'ps']);
+const ALLOWED_POST = new Set(['show', 'chat', 'generate', 'embed', 'embeddings']);
+
+const BASE_URL_ERROR = 'Missing or invalid X-Ollama-Base-URL (must be http or https URL)';
+
 function getOllamaBaseUrl(req: express.Request): string | null {
   const header = req.headers[CQL_STUDIO_SERVER_OLLAMA_BASE_URL];
   if (typeof header === 'string' && header.trim() !== '') {
@@ -32,6 +37,18 @@ function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, '');
 }
 
+function resolveOllamaBaseUrl(
+  req: express.Request,
+  res: express.Response
+): string | null {
+  const baseUrl = getOllamaBaseUrl(req);
+  if (!baseUrl || !isValidOllamaUrl(baseUrl)) {
+    res.status(400).json({ error: BASE_URL_ERROR });
+    return null;
+  }
+  return baseUrl;
+}
+
 async function proxyGet(baseUrl: string, path: string, res: express.Response): Promise<boolean> {
   const target = `${normalizeBaseUrl(baseUrl)}/api/${path}`;
   const response = await fetch(target, {
@@ -49,32 +66,6 @@ async function proxyGet(baseUrl: string, path: string, res: express.Response): P
   res.status(response.status).json(data);
   return true;
 }
-
-router.get('/tags', async (req, res, next) => {
-  try {
-    const baseUrl = getOllamaBaseUrl(req);
-    if (!baseUrl || !isValidOllamaUrl(baseUrl)) {
-      res.status(400).json({ error: 'Missing or invalid X-Ollama-Base-URL (must be http or https URL)' });
-      return;
-    }
-    await proxyGet(baseUrl, 'tags', res);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get('/version', async (req, res, next) => {
-  try {
-    const baseUrl = getOllamaBaseUrl(req);
-    if (!baseUrl || !isValidOllamaUrl(baseUrl)) {
-      res.status(400).json({ error: 'Missing or invalid X-Ollama-Base-URL (must be http or https URL)' });
-      return;
-    }
-    await proxyGet(baseUrl, 'version', res);
-  } catch (err) {
-    next(err);
-  }
-});
 
 async function proxyPost(
   baseUrl: string,
@@ -116,53 +107,35 @@ async function proxyPost(
   return true;
 }
 
-router.post('/show', async (req, res, next) => {
+router.get('/:endpoint', async (req, res, next) => {
   try {
-    const baseUrl = getOllamaBaseUrl(req);
-    if (!baseUrl || !isValidOllamaUrl(baseUrl)) {
-      res.status(400).json({ error: 'Missing or invalid X-Ollama-Base-URL (must be http or https URL)' });
+    const endpoint = req.params.endpoint;
+    if (!ALLOWED_GET.has(endpoint)) {
+      res.status(404).json({ error: 'Not found' });
       return;
     }
-    await proxyPost(baseUrl, 'show', req, res);
+    const baseUrl = resolveOllamaBaseUrl(req, res);
+    if (!baseUrl) {
+      return;
+    }
+    await proxyGet(baseUrl, endpoint, res);
   } catch (err) {
     next(err);
   }
 });
 
-router.post('/chat', async (req, res, next) => {
+router.post('/:endpoint', async (req, res, next) => {
   try {
-    const baseUrl = getOllamaBaseUrl(req);
-    if (!baseUrl || !isValidOllamaUrl(baseUrl)) {
-      res.status(400).json({ error: 'Missing or invalid X-Ollama-Base-URL (must be http or https URL)' });
+    const endpoint = req.params.endpoint;
+    if (!ALLOWED_POST.has(endpoint)) {
+      res.status(404).json({ error: 'Not found' });
       return;
     }
-    await proxyPost(baseUrl, 'chat', req, res);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post('/generate', async (req, res, next) => {
-  try {
-    const baseUrl = getOllamaBaseUrl(req);
-    if (!baseUrl || !isValidOllamaUrl(baseUrl)) {
-      res.status(400).json({ error: 'Missing or invalid X-Ollama-Base-URL (must be http or https URL)' });
+    const baseUrl = resolveOllamaBaseUrl(req, res);
+    if (!baseUrl) {
       return;
     }
-    await proxyPost(baseUrl, 'generate', req, res);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post('/embeddings', async (req, res, next) => {
-  try {
-    const baseUrl = getOllamaBaseUrl(req);
-    if (!baseUrl || !isValidOllamaUrl(baseUrl)) {
-      res.status(400).json({ error: 'Missing or invalid X-Ollama-Base-URL (must be http or https URL)' });
-      return;
-    }
-    await proxyPost(baseUrl, 'embeddings', req, res);
+    await proxyPost(baseUrl, endpoint, req, res);
   } catch (err) {
     next(err);
   }

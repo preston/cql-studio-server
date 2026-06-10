@@ -1,5 +1,5 @@
 /**
- * Regression tests for the Ollama proxy (GET tags/version, POST show/chat/generate/embeddings).
+ * Regression tests for the Ollama proxy (allowlisted GET/POST endpoints).
  * Mocks upstream fetch so no real Ollama instance is required.
  */
 
@@ -337,6 +337,103 @@ test('POST /api/ollama/generate proxies and returns JSON when stream is false', 
   }
 });
 
+test('GET /api/ollama/ps proxies to upstream', async () => {
+  const mockFetch = mock.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof Request ? input.url : (input as URL).href;
+    if (url === `${OLLAMA_BASE}/api/ps`) {
+      return new Response(
+        JSON.stringify({
+          models: [
+            {
+              name: 'llama3.2',
+              model: 'llama3.2',
+              size: 1000,
+              digest: 'abc',
+              expires_at: '2026-06-10T12:00:00Z',
+              size_vram: 500,
+              context_length: 4096
+            }
+          ]
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return realFetch(input as RequestInfo | URL, init);
+  });
+  mock.method(globalThis, 'fetch', mockFetch as typeof fetch);
+
+  try {
+    const app = createApp();
+    await withServer(app, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/ollama/ps`, {
+        headers: { [BASE_HEADER]: OLLAMA_BASE }
+      });
+      assert.strictEqual(res.status, 200);
+      const data = (await res.json()) as { models?: { name: string; context_length?: number }[] };
+      assert.strictEqual(data.models?.[0]?.name, 'llama3.2');
+      assert.strictEqual(data.models?.[0]?.context_length, 4096);
+      const psCall = mockFetch.mock.calls.find((c: { arguments: unknown[] }) => {
+        const u = c.arguments[0];
+        return (typeof u === 'string' ? u : (u as URL)?.href) === `${OLLAMA_BASE}/api/ps`;
+      });
+      assert.ok(psCall);
+    });
+  } finally {
+    restoreFetch();
+  }
+});
+
+test('POST /api/ollama/embed proxies body with input and returns JSON', async () => {
+  const mockFetch = mock.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof Request ? input.url : (input as URL).href;
+    if (url === `${OLLAMA_BASE}/api/embed`) {
+      const body = init?.body as string;
+      const parsed = body ? JSON.parse(body) : {};
+      if (parsed.model === 'nomic-embed-text' && parsed.input === 'hello') {
+        return new Response(
+          JSON.stringify({
+            model: 'nomic-embed-text',
+            embeddings: [[0.1, 0.2, 0.3]]
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response('Bad Request', { status: 400 });
+    }
+    return realFetch(input as RequestInfo | URL, init);
+  });
+  mock.method(globalThis, 'fetch', mockFetch as typeof fetch);
+
+  try {
+    const app = createApp();
+    await withServer(app, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/ollama/embed`, {
+        method: 'POST',
+        headers: {
+          [BASE_HEADER]: OLLAMA_BASE,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ model: 'nomic-embed-text', input: 'hello' })
+      });
+      assert.strictEqual(res.status, 200);
+      const data = (await res.json()) as { embeddings?: number[][]; model?: string };
+      assert.strictEqual(data.model, 'nomic-embed-text');
+      assert.deepStrictEqual(data.embeddings, [[0.1, 0.2, 0.3]]);
+      const embedCall = mockFetch.mock.calls.find((c: { arguments: unknown[] }) => {
+        const u = c.arguments[0];
+        return (typeof u === 'string' ? u : (u as URL)?.href) === `${OLLAMA_BASE}/api/embed`;
+      });
+      assert.ok(embedCall);
+      assert.strictEqual(
+        JSON.parse((embedCall as { arguments: unknown[] }).arguments[1]?.body as string).input,
+        'hello'
+      );
+    });
+  } finally {
+    restoreFetch();
+  }
+});
+
 test('POST /api/ollama/embeddings proxies and returns JSON', async () => {
   const mockFetch = mock.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof Request ? input.url : (input as URL).href;
@@ -382,14 +479,50 @@ test('POST /api/ollama/embeddings proxies and returns JSON', async () => {
 test('POST /api/ollama/* returns 400 without valid base URL', async () => {
   const app = createApp();
   await withServer(app, async (baseUrl) => {
-    for (const path of ['show', 'chat', 'generate', 'embeddings'] as const) {
+    const bodies: Record<string, string> = {
+      show: '{"model":"x"}',
+      chat: '{"model":"x","messages":[]}',
+      generate: '{"model":"x","prompt":"x"}',
+      embed: '{"model":"x","input":"x"}',
+      embeddings: '{"model":"x","prompt":"x"}'
+    };
+    for (const path of ['show', 'chat', 'generate', 'embed', 'embeddings'] as const) {
       const res = await fetch(`${baseUrl}/api/ollama/${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: path === 'show' ? '{"model":"x"}' : path === 'chat' ? '{"model":"x","messages":[]}' : path === 'generate' ? '{"model":"x","prompt":"x"}' : '{"model":"x","prompt":"x"}'
+        body: bodies[path]
       });
       assert.strictEqual(res.status, 400, `POST /api/ollama/${path} should 400 without base URL`);
     }
+  });
+});
+
+test('GET /api/ollama/unknown returns 404', async () => {
+  const app = createApp();
+  await withServer(app, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/ollama/unknown`, {
+      headers: { [BASE_HEADER]: OLLAMA_BASE }
+    });
+    assert.strictEqual(res.status, 404);
+    const data = (await res.json()) as { error?: string };
+    assert.strictEqual(data.error, 'Not found');
+  });
+});
+
+test('POST /api/ollama/unknown returns 404', async () => {
+  const app = createApp();
+  await withServer(app, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/ollama/unknown`, {
+      method: 'POST',
+      headers: {
+        [BASE_HEADER]: OLLAMA_BASE,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ model: 'x' })
+    });
+    assert.strictEqual(res.status, 404);
+    const data = (await res.json()) as { error?: string };
+    assert.strictEqual(data.error, 'Not found');
   });
 });
 

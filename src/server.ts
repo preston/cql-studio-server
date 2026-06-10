@@ -47,7 +47,7 @@ app.get('/health', (req, res) => {
 // MCP routes
 app.use('/', mcpRouter);
 
-// Ollama proxy: GET /api/ollama/tags, /version; POST /api/ollama/show, /chat, /generate, /embeddings
+// Ollama proxy (allowlisted): GET tags, version, ps; POST show, chat, generate, embed, embeddings
 app.use('/api/ollama', ollamaProxyRouter);
 
 // VSAC: browser CORS bypass — forward UMLS Basic auth from client (never logged)
