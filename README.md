@@ -182,6 +182,8 @@ Build and run with Docker:
 ```bash
 # Build the image
 docker build -t cql-studio-server .
+# Alternatively, build images for multiple architectures if supported by your build environment
+docker buildx build --platform linux/arm64/v8,linux/amd64 -t p3000/cql-studio-server:latest .
 
 # Run the container
 docker run -d \
