@@ -57,20 +57,4 @@ router.post('/execute', async (req, res) => {
   }
 });
 
-/**
- * POST /fhir
- * Get FHIR data (legacy endpoint for compatibility)
- */
-router.post('/fhir', async (req, res, next) => {
-  try {
-    res.status(501).json({
-      error: 'FHIR endpoint not yet implemented'
-    });
-  } catch (error) {
-    const err = error instanceof Error ? error : new Error(String(error));
-    console.error('[MCP] POST /fhir failed:', err.message, err.stack ?? '');
-    next(err);
-  }
-});
-
 export { router as mcpRouter };
