@@ -3,6 +3,30 @@
 import { WebSearchService } from '../services/web-search/index.js';
 import { SearXNGService } from '../services/searxng.service.js';
 
+const DEFAULT_VSAC_FHIR_BASE = 'https://cts.nlm.nih.gov/fhir';
+const ALLOWED_VSAC_HOSTS = new Set(['cts.nlm.nih.gov', 'uat-cts.nlm.nih.gov']);
+const FHIR_JSON = 'application/fhir+json';
+
+interface VsacToolConfig {
+  fhirBaseUrl: string;
+  username: string;
+  password: string;
+}
+
+interface VsacValueSetSummary {
+  resourceType: 'ValueSet';
+  id?: string;
+  url?: string;
+  name?: string;
+  title?: string;
+  version?: string;
+  status?: string;
+  publisher?: string;
+  date?: string;
+  description?: string;
+  expansionTotal?: number;
+}
+
 export interface MCPTool {
   name: string;
   description: string;
@@ -66,7 +90,7 @@ export class ToolExecutor {
       },
       {
         name: 'searxng_search',
-        description: 'Perform an anonymous web search via a user-configured SearXNG instance (no API key required). Returns an object: { query, resultsCount, results: [{ title, url, snippet }] }. Use when you need structured search results to process or filter. Requires searxng_base_url from the user. Rate limited (30 requests per minute). Optional: categories, language, time_range, safesearch, max_results (1–50).',
+        description: 'Perform an anonymous general web search via a user-configured SearXNG instance (no API key required). Do NOT use this tool to discover, look up, or validate VSAC ValueSets, OIDs, or canonical URLs; use vsac_search for discovery and validate_vsac for an existing reference. Returns an object: { query, resultsCount, results: [{ title, url, snippet }] }. Use for non-VSAC web research when you need structured search results to process or filter. Requires searxng_base_url from the user. Rate limited (30 requests per minute). Optional: categories, language, time_range, safesearch, max_results (1–50).',
         statusMessage: 'Searching web (SearXNG)...',
         allowedInPlanMode: true,
         parameters: {
@@ -115,7 +139,7 @@ export class ToolExecutor {
       },
       {
         name: 'searxng_search_formatted',
-        description: 'Perform an anonymous web search via a SearXNG instance and return a single formatted string for LLM context (no API key required). Use when you want to inject search results directly into your response. Return value: a single string with numbered entries (title, URL, description per result). Requires searxng_base_url. Rate limited (30 requests per minute). Same optional parameters as searxng_search (categories, language, time_range, safesearch, max_results 1–50).',
+        description: 'Perform an anonymous general web search via a SearXNG instance and return a single formatted string for LLM context (no API key required). Do NOT use this tool to discover, look up, or validate VSAC ValueSets, OIDs, or canonical URLs; use vsac_search for discovery and validate_vsac for an existing reference. Use for non-VSAC web research when you want to inject search results directly into your response. Return value: a single string with numbered entries (title, URL, description per result). Requires searxng_base_url. Rate limited (30 requests per minute). Same optional parameters as searxng_search (categories, language, time_range, safesearch, max_results 1–50).',
         statusMessage: 'Searching web (SearXNG)...',
         allowedInPlanMode: true,
         parameters: {
@@ -159,7 +183,7 @@ export class ToolExecutor {
       },
       {
         name: 'searxng_search_then_fetch',
-        description: 'Run a SearXNG search and then fetch full page content for the top results in one call. Use when you need both search and full text of the first few results. Returns an array of { url, title, snippet, content } (content is formatted body text). Consumes 1 search + N fetch rate limit tokens (N = max_results_to_fetch, default 3, max 5). Requires searxng_base_url and query.',
+        description: 'Run a general SearXNG web search and then fetch full page content for the top results in one call. Do NOT use this tool for VSAC ValueSet discovery or validation; use vsac_search or validate_vsac instead. Use for non-VSAC research when you need both search and full text of the first few results. Returns an array of { url, title, snippet, content } (content is formatted body text). Consumes 1 search + N fetch rate limit tokens (N = max_results_to_fetch, default 3, max 5). Requires searxng_base_url and query.',
         statusMessage: 'Searching and fetching...',
         allowedInPlanMode: true,
         parameters: {
@@ -187,7 +211,7 @@ export class ToolExecutor {
       },
       {
         name: 'searxng_search_then_fetch_formatted',
-        description: 'Run a SearXNG search and fetch full content for the top results, then return a single formatted string for LLM context. Same as searxng_search_then_fetch but returns one string with all results concatenated. Use for "search and read" in one step. max_results_to_fetch default 3, max 5.',
+        description: 'Run a general SearXNG web search and fetch full content for the top results, then return a single formatted string for LLM context. Do NOT use this tool for VSAC ValueSet discovery or validation; use vsac_search or validate_vsac instead. Same as searxng_search_then_fetch but returns one string with all results concatenated. Use for non-VSAC "search and read" tasks. max_results_to_fetch default 3, max 5.',
         statusMessage: 'Searching and fetching...',
         allowedInPlanMode: true,
         parameters: {
@@ -328,6 +352,66 @@ export class ToolExecutor {
           properties: {},
           required: []
         }
+      },
+      {
+        name: 'vsac_search',
+        description: 'MANDATORY for VSAC ValueSet discovery. Search the official NLM VSAC FHIR ValueSet endpoint before writing or editing CQL that introduces a ValueSet when the exact canonical URL is not already known in this conversation. Results returned by vsac_search are authoritative and MUST NOT be passed to validate_vsac; choose a candidate and proceed directly to the requested code edit using its exact canonical URL. Never guess a VSAC OID/canonical URL and never use SearXNG as a substitute. Returns verified candidates with id/OID, canonical URL, title/name, version, status, publisher, description, and a CQL declaration. VSAC credentials and base URL are injected by CQL Studio; do not ask the user for them.',
+        statusMessage: 'Searching VSAC...',
+        allowedInPlanMode: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Human search text, usually a clinical value set name or topic. Applied to VSAC/FHIR title contains.'
+            },
+            title: {
+              type: 'string',
+              description: 'FHIR title contains search. VSAC display name maps to FHIR title.'
+            },
+            name: {
+              type: 'string',
+              description: 'FHIR name contains search for machine-oriented names.'
+            },
+            url: {
+              type: 'string',
+              description: 'Exact canonical ValueSet URL to search for.'
+            },
+            identifier: {
+              type: 'string',
+              description: 'Identifier or OID to search for.'
+            },
+            status: {
+              type: 'string',
+              description: 'FHIR ValueSet status, e.g. active, draft, retired. Defaults to active.'
+            },
+            count: {
+              type: 'number',
+              description: 'Maximum results to return. Defaults to 10, max 50.'
+            }
+          },
+          required: []
+        }
+      },
+      {
+        name: 'validate_vsac',
+        description: 'Use only for checking an exact VSAC canonical URL or id/OID that came from user input or existing CQL and has not already been established by vsac_search in this conversation. Never call validate_vsac for a candidate returned by vsac_search; search results are already authoritative. Never validate through SearXNG. If only a clinical topic/name is known, call vsac_search instead. After valid=true, proceed directly to the requested code edit using the returned exact canonical URL. VSAC credentials and base URL are injected by CQL Studio; do not ask the user for them.',
+        statusMessage: 'Validating VSAC value set...',
+        allowedInPlanMode: true,
+        parameters: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              description: 'Canonical ValueSet URL to validate.'
+            },
+            id: {
+              type: 'string',
+              description: 'ValueSet logical id or OID to validate. urn:oid: prefixes are accepted.'
+            }
+          },
+          required: []
+        }
       }
     ];
   }
@@ -357,7 +441,8 @@ export class ToolExecutor {
     const maxStr = 200;
     const maxArray = 5;
     for (const [k, v] of Object.entries(params)) {
-      if (v == null) out[k] = v;
+      if (/password|api[_-]?key|token|secret/i.test(k)) out[k] = '[redacted]';
+      else if (v == null) out[k] = v;
       else if (typeof v === 'string') out[k] = v.length <= maxStr ? v : v.slice(0, maxStr) + '...';
       else if (Array.isArray(v)) out[k] = v.length <= maxArray ? v : `[${v.length} items]`;
       else if (typeof v === 'object') out[k] = '[object]';
@@ -394,6 +479,10 @@ export class ToolExecutor {
         return await this.executeFetchSitemap(params);
       case 'get_rate_limit_status':
         return await this.executeGetRateLimitStatus(params);
+      case 'vsac_search':
+        return await this.executeVsacSearch(params);
+      case 'validate_vsac':
+        return await this.executeValidateVsac(params);
       default:
         throw new Error(`Unknown tool: ${toolName}`);
     }
@@ -550,4 +639,167 @@ export class ToolExecutor {
       searxng_remaining: this.searxngService.getRemainingSearchTokens()
     };
   }
+
+  private getVsacConfig(params: any): VsacToolConfig {
+    const fhirBaseRaw =
+      typeof params?.vsac_fhir_base_url === 'string' && params.vsac_fhir_base_url.trim()
+        ? params.vsac_fhir_base_url.trim()
+        : DEFAULT_VSAC_FHIR_BASE;
+    const base = new URL(fhirBaseRaw.replace(/\/+$/, ''));
+    if (base.protocol !== 'https:' || !ALLOWED_VSAC_HOSTS.has(base.hostname)) {
+      throw new Error('Invalid VSAC FHIR base URL. Only NLM CTS hosts are allowed.');
+    }
+    const username =
+      typeof params?.vsac_api_username === 'string' && params.vsac_api_username.trim()
+        ? params.vsac_api_username.trim()
+        : 'apikey';
+    const password = typeof params?.vsac_api_password === 'string' ? params.vsac_api_password.trim() : '';
+    if (!password) {
+      throw new Error('VSAC UMLS API key is required. Configure it in CQL Studio Settings.');
+    }
+    return {
+      fhirBaseUrl: base.toString().replace(/\/+$/, ''),
+      username,
+      password
+    };
+  }
+
+  private vsacHeaders(config: VsacToolConfig): Record<string, string> {
+    const token = Buffer.from(`${config.username}:${config.password}`).toString('base64');
+    return {
+      Accept: FHIR_JSON,
+      'Content-Type': FHIR_JSON,
+      Authorization: `Basic ${token}`
+    };
+  }
+
+  private async fetchVsacJson<T>(config: VsacToolConfig, pathAndQuery: string): Promise<T> {
+    const path = pathAndQuery.startsWith('/') ? pathAndQuery : `/${pathAndQuery}`;
+    const response = await fetch(`${config.fhirBaseUrl}${path}`, {
+      method: 'GET',
+      headers: this.vsacHeaders(config)
+    });
+    if (!response.ok) {
+      let detail = response.statusText;
+      try {
+        const body = await response.text();
+        if (body) detail = body.substring(0, 500);
+      } catch {
+        // Keep status text.
+      }
+      throw new Error(`VSAC request failed (${response.status}): ${detail}`);
+    }
+    return (await response.json()) as T;
+  }
+
+  private async fetchVsacJsonOrNull<T>(config: VsacToolConfig, pathAndQuery: string): Promise<T | null> {
+    try {
+      return await this.fetchVsacJson<T>(config, pathAndQuery);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('VSAC request failed (404):')) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private summarizeValueSet(vs: any): VsacValueSetSummary {
+    return {
+      resourceType: 'ValueSet',
+      id: typeof vs?.id === 'string' ? vs.id : undefined,
+      url: typeof vs?.url === 'string' ? vs.url : undefined,
+      name: typeof vs?.name === 'string' ? vs.name : undefined,
+      title: typeof vs?.title === 'string' ? vs.title : undefined,
+      version: typeof vs?.version === 'string' ? vs.version : undefined,
+      status: typeof vs?.status === 'string' ? vs.status : undefined,
+      publisher: typeof vs?.publisher === 'string' ? vs.publisher : undefined,
+      date: typeof vs?.date === 'string' ? vs.date : undefined,
+      description: typeof vs?.description === 'string' ? vs.description : undefined,
+      expansionTotal: typeof vs?.expansion?.total === 'number' ? vs.expansion.total : undefined
+    };
+  }
+
+  private cqlSnippetForValueSet(vs: any): string | null {
+    if (!vs?.url || typeof vs.url !== 'string') return null;
+    const label = String(vs.title || vs.name || vs.id || 'VSAC ValueSet').replace(/"/g, '\\"');
+    return `valueset "${label}": '${vs.url}'`;
+  }
+
+  private async fetchVsacValueSetByIdOrUrl(config: VsacToolConfig, params: any): Promise<any | null> {
+    const url = typeof params?.url === 'string' ? params.url.trim() : '';
+    const idRaw = typeof params?.id === 'string' ? params.id.trim() : '';
+    if (url) {
+      const q = new URLSearchParams();
+      q.set('url', url);
+      q.set('_count', '1');
+      const bundle = await this.fetchVsacJson<any>(config, `/ValueSet?${q.toString()}`);
+      const first = bundle?.entry?.[0]?.resource;
+      return first?.resourceType === 'ValueSet' ? first : null;
+    }
+    if (idRaw) {
+      const id = idRaw.replace(/^urn:oid:/i, '');
+      return await this.fetchVsacJsonOrNull<any>(config, `/ValueSet/${encodeURIComponent(id)}`);
+    }
+    throw new Error('Either url or id is required.');
+  }
+
+  private async executeVsacSearch(params: any): Promise<any> {
+    const config = this.getVsacConfig(params);
+    const q = new URLSearchParams();
+    const query = typeof params?.query === 'string' ? params.query.trim() : '';
+    const title = typeof params?.title === 'string' ? params.title.trim() : '';
+    const name = typeof params?.name === 'string' ? params.name.trim() : '';
+    const url = typeof params?.url === 'string' ? params.url.trim() : '';
+    const identifier = typeof params?.identifier === 'string' ? params.identifier.trim() : '';
+    const status = typeof params?.status === 'string' ? params.status.trim() : 'active';
+    const count = Math.min(50, Math.max(1, Number(params?.count) || 10));
+
+    if (!query && !title && !name && !url && !identifier) {
+      throw new Error('vsac_search requires query, title, name, url, or identifier.');
+    }
+
+    if (title || query) q.set('title:contains', title || query);
+    if (name) q.set('name:contains', name);
+    if (url) q.set('url', url);
+    if (identifier) q.set('identifier', identifier);
+    if (status) q.set('status', status);
+    q.set('_count', String(count));
+
+    const bundle = await this.fetchVsacJson<any>(config, `/ValueSet?${q.toString()}`);
+    const valueSets = Array.isArray(bundle?.entry)
+      ? bundle.entry.map((entry: any) => entry?.resource).filter((resource: any) => resource?.resourceType === 'ValueSet')
+      : [];
+    return {
+      query: { query, title, name, url, identifier, status, count },
+      total: typeof bundle?.total === 'number' ? bundle.total : undefined,
+      resultsCount: valueSets.length,
+      results: valueSets.map((vs: any) => ({
+        ...this.summarizeValueSet(vs),
+        canonicalUrl: typeof vs?.url === 'string' ? vs.url : undefined,
+        cqlDeclaration: this.cqlSnippetForValueSet(vs),
+        cqlSnippet: this.cqlSnippetForValueSet(vs)
+      })),
+      codeGenerationInstruction: 'These results are authoritative; do not call validate_vsac. Choose the best match and proceed directly to the code edit, copying its canonicalUrl exactly. Do not construct, shorten, normalize, or guess a different VSAC URL or OID.'
+    };
+  }
+
+  private async executeValidateVsac(params: any): Promise<any> {
+    const config = this.getVsacConfig(params);
+    const valueSet = await this.fetchVsacValueSetByIdOrUrl(config, params);
+    if (!valueSet) {
+      return {
+        valid: false,
+        message: 'No VSAC ValueSet found for the provided reference.'
+      };
+    }
+    return {
+      valid: true,
+      valueSet: this.summarizeValueSet(valueSet),
+      canonicalUrl: valueSet.url,
+      cqlDeclaration: this.cqlSnippetForValueSet(valueSet),
+      cqlSnippet: this.cqlSnippetForValueSet(valueSet),
+      codeGenerationInstruction: 'Copy canonicalUrl exactly into the CQL declaration. Do not construct, shorten, normalize, or guess a different VSAC URL or OID.'
+    };
+  }
+
 }
