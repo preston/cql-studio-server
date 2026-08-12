@@ -8,6 +8,7 @@ import {
   type User,
 } from '@prisma/client';
 import { getPrisma } from '../db/prisma.js';
+import type { WorkspaceActivityTargetType, WorkspaceActivityVerb } from './activity.js';
 
 const ROLE_RANK: Record<WorkspaceRole, number> = {
   VIEWER: 1,
@@ -142,8 +143,8 @@ function cryptoRandom(): string {
 export async function recordActivity(
   workspaceId: string,
   actorUserId: string,
-  verb: string,
-  targetType?: string,
+  verb: WorkspaceActivityVerb,
+  targetType?: WorkspaceActivityTargetType,
   targetId?: string,
   metadata?: Record<string, unknown>
 ): Promise<void> {

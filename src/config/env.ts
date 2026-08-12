@@ -19,9 +19,6 @@ export interface ServerEnv {
   /** Verification order: [current, ...previous]. */
   sessionSecrets: string[];
   databaseUrl: string;
-  defaultWorkspaceVisibility: 'PRIVATE' | 'PUBLIC';
-  allowPublicWorkspaces: boolean;
-  shareLinkMaxExpiryDays: number;
 }
 
 function requiredWhenSso(name: string, value: string | undefined, ssoOn: boolean): string {
@@ -59,26 +56,6 @@ export function loadEnv(): ServerEnv {
       'SSO is configured but CQL_STUDIO_SERVER_DATABASE_URL is not set. Refusing to start.'
     );
   }
-
-  const defaultVisibilityRaw = (
-    process.env.CQL_STUDIO_SERVER_TEAM_DEFAULT_WORKSPACE_VISIBILITY ?? 'PRIVATE'
-  )
-    .trim()
-    .toUpperCase();
-  const defaultWorkspaceVisibility: 'PRIVATE' | 'PUBLIC' =
-    defaultVisibilityRaw === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE';
-
-  const allowPublicRaw = (
-    process.env.CQL_STUDIO_SERVER_TEAM_ALLOW_PUBLIC_WORKSPACES ?? 'true'
-  )
-    .trim()
-    .toLowerCase();
-  const allowPublicWorkspaces = allowPublicRaw !== 'false' && allowPublicRaw !== '0';
-
-  const maxExpiry = Number.parseInt(
-    process.env.CQL_STUDIO_SERVER_TEAM_SHARE_LINK_MAX_EXPIRY_DAYS ?? '30',
-    10
-  );
 
   const sessionSecret = requiredWhenSso(
     'CQL_STUDIO_SERVER_SESSION_SECRET',
@@ -136,8 +113,5 @@ export function loadEnv(): ServerEnv {
     sessionSecret,
     sessionSecrets: sessionSecret ? [sessionSecret, ...previousSessionSecrets] : [],
     databaseUrl,
-    defaultWorkspaceVisibility,
-    allowPublicWorkspaces,
-    shareLinkMaxExpiryDays: Number.isFinite(maxExpiry) && maxExpiry > 0 ? maxExpiry : 30,
   };
 }

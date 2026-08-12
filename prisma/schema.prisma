@@ -45,7 +45,7 @@ model User {
   createdWorkspaces     Workspace[]            @relation("WorkspaceCreatedBy")
   grantedAccess         WorkspaceAccessGrant[] @relation("GrantGrantedBy")
   workspaceActivity     WorkspaceActivity[]
-  createdShareLinks     WorkspaceShareLink[]
+  createdResourceRefs   WorkspaceResourceReference[]
 
   @@unique([ssoIssuer, ssoSubject])
   @@index([email])
@@ -103,9 +103,9 @@ model Workspace {
   updatedAt       DateTime            @updatedAt
 
   grants             WorkspaceAccessGrant[]
-  shareLinks         WorkspaceShareLink[]
   activity           WorkspaceActivity[]
   sharedEnvironments SharedEnvironment[]
+  resourceReferences WorkspaceResourceReference[]
 
   @@index([createdByUserId])
   @@index([visibility])
@@ -119,7 +119,6 @@ model WorkspaceAccessGrant {
   /// User or Team id (always a UUID)
   principalId     String                 @db.Uuid
   role            WorkspaceRole
-  isGuest         Boolean                @default(false)
   grantedByUserId String?                @db.Uuid
   grantedBy       User?                  @relation("GrantGrantedBy", fields: [grantedByUserId], references: [id], onDelete: SetNull)
   createdAt       DateTime               @default(now())
@@ -128,23 +127,6 @@ model WorkspaceAccessGrant {
   @@unique([workspaceId, principalType, principalId])
   @@index([principalType, principalId])
   @@index([workspaceId, role])
-}
-
-model WorkspaceShareLink {
-  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId     String    @db.Uuid
-  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  tokenHash       String    @unique
-  createdByUserId String    @db.Uuid
-  createdBy       User      @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
-  expiresAt       DateTime?
-  revokedAt       DateTime?
-  useCount        Int       @default(0)
-  maxUses         Int?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-
-  @@index([workspaceId])
 }
 
 model WorkspaceActivity {
@@ -177,4 +159,22 @@ model SharedEnvironment {
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
+}
+
+model WorkspaceResourceReference {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String    @db.Uuid
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  resourceType    String
+  resourceId      String
+  canonicalUrl    String?
+  displayName     String?
+  createdByUserId String    @db.Uuid
+  createdBy       User      @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([workspaceId, resourceType, resourceId])
+  @@index([workspaceId])
+  @@index([createdByUserId])
 }

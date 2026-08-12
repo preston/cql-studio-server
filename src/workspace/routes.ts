@@ -2,7 +2,6 @@
 
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
-import crypto from 'node:crypto';
 import {
   Prisma,
   WorkspacePrincipalType,
@@ -20,6 +19,7 @@ import {
   roleAtLeast,
   uniqueSlug,
 } from './access.js';
+import { WorkspaceActivityTargetType, WorkspaceActivityVerb } from './activity.js';
 
 function asyncHandler(
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
@@ -105,54 +105,6 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
     })
   );
 
-  // Must be registered before /:id so "redeem" is not treated as an id
-  router.post(
-    '/redeem/:token',
-    asyncHandler(async (req, res) => {
-      const token = req.params.token;
-      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-      const link = await getPrisma().workspaceShareLink.findUnique({ where: { tokenHash } });
-      if (!link || link.revokedAt || (link.expiresAt && link.expiresAt < new Date())) {
-        res.status(404).json({ error: 'Share link invalid or expired' });
-        return;
-      }
-      if (link.maxUses != null && link.useCount >= link.maxUses) {
-        res.status(410).json({ error: 'Share link has reached its use limit' });
-        return;
-      }
-      const grant = await getPrisma().workspaceAccessGrant.upsert({
-        where: {
-          workspaceId_principalType_principalId: {
-            workspaceId: link.workspaceId,
-            principalType: WorkspacePrincipalType.USER,
-            principalId: req.user!.id,
-          },
-        },
-        create: {
-          workspaceId: link.workspaceId,
-          principalType: WorkspacePrincipalType.USER,
-          principalId: req.user!.id,
-          role: WorkspaceRole.VIEWER,
-          isGuest: true,
-          grantedByUserId: link.createdByUserId,
-        },
-        update: {},
-      });
-      await getPrisma().workspaceShareLink.update({
-        where: { id: link.id },
-        data: { useCount: { increment: 1 } },
-      });
-      await recordActivity(
-        link.workspaceId,
-        req.user!.id,
-        'share_link.redeemed',
-        'grant',
-        grant.id
-      );
-      res.json({ workspaceId: link.workspaceId, grant });
-    })
-  );
-
   router.post(
     '/',
     asyncHandler(async (req, res) => {
@@ -162,14 +114,10 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
         res.status(400).json({ error: 'name is required' });
         return;
       }
-      let visibility: WorkspaceVisibility = env.defaultWorkspaceVisibility;
+      let visibility: WorkspaceVisibility = WorkspaceVisibility.PRIVATE;
       if (typeof req.body?.visibility === 'string') {
         const v = req.body.visibility.toUpperCase();
         if (v === 'PUBLIC') {
-          if (!env.allowPublicWorkspaces) {
-            res.status(400).json({ error: 'Public workspaces are disabled on this deployment' });
-            return;
-          }
           visibility = WorkspaceVisibility.PUBLIC;
         } else {
           visibility = WorkspaceVisibility.PRIVATE;
@@ -196,7 +144,13 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
           },
         },
       });
-      await recordActivity(workspace.id, user.id, 'workspace.created', 'workspace', workspace.id);
+      await recordActivity(
+        workspace.id,
+        user.id,
+        WorkspaceActivityVerb.WorkspaceCreated,
+        WorkspaceActivityTargetType.Workspace,
+        workspace.id
+      );
       res.status(201).json({ ...workspace, myRole: WorkspaceRole.OWNER });
     })
   );
@@ -238,10 +192,6 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
       if (typeof req.body?.visibility === 'string') {
         const v = req.body.visibility.toUpperCase();
         if (v === 'PUBLIC') {
-          if (!env.allowPublicWorkspaces) {
-            res.status(400).json({ error: 'Public workspaces are disabled on this deployment' });
-            return;
-          }
           data.visibility = WorkspaceVisibility.PUBLIC;
         } else if (v === 'PRIVATE') {
           data.visibility = WorkspaceVisibility.PRIVATE;
@@ -251,7 +201,13 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
         where: { id: req.params.id },
         data,
       });
-      await recordActivity(workspace.id, req.user!.id, 'workspace.updated', 'workspace', workspace.id);
+      await recordActivity(
+        workspace.id,
+        req.user!.id,
+        WorkspaceActivityVerb.WorkspaceUpdated,
+        WorkspaceActivityTargetType.Workspace,
+        workspace.id
+      );
       res.json({ ...workspace, myRole: role });
     })
   );
@@ -281,7 +237,45 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
         where: { workspaceId: req.params.id },
         orderBy: { createdAt: 'asc' },
       });
-      res.json(grants);
+      const userIds = grants
+        .filter((g) => g.principalType === WorkspacePrincipalType.USER)
+        .map((g) => g.principalId);
+      const teamIds = grants
+        .filter((g) => g.principalType === WorkspacePrincipalType.TEAM)
+        .map((g) => g.principalId);
+      const [users, teams] = await Promise.all([
+        userIds.length
+          ? getPrisma().user.findMany({
+              where: { id: { in: userIds } },
+              select: { id: true, email: true, displayName: true },
+            })
+          : Promise.resolve([]),
+        teamIds.length
+          ? getPrisma().team.findMany({
+              where: { id: { in: teamIds } },
+              select: { id: true, name: true },
+            })
+          : Promise.resolve([]),
+      ]);
+      const userById = new Map(users.map((u) => [u.id, u]));
+      const teamById = new Map(teams.map((t) => [t.id, t]));
+      res.json(
+        grants.map((grant) => {
+          if (grant.principalType === WorkspacePrincipalType.USER) {
+            const user = userById.get(grant.principalId);
+            return {
+              ...grant,
+              principalEmail: user?.email ?? null,
+              principalDisplayName: user?.displayName ?? null,
+            };
+          }
+          const team = teamById.get(grant.principalId);
+          return {
+            ...grant,
+            principalName: team?.name ?? null,
+          };
+        })
+      );
     })
   );
 
@@ -294,30 +288,52 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
         return;
       }
       const principalType = parsePrincipalType(req.body?.type ?? req.body?.principalType);
-      const principalId =
-        typeof req.body?.id === 'string'
-          ? req.body.id
-          : typeof req.body?.principalId === 'string'
-            ? req.body.principalId
-            : '';
       const grantRole = parseRole(req.body?.role);
-      if (!principalType || !principalId || !grantRole) {
-        res.status(400).json({ error: 'type, id, and role are required' });
+      if (!principalType || !grantRole) {
+        res.status(400).json({ error: 'type and role are required' });
         return;
       }
+
+      let principalId = '';
       if (principalType === WorkspacePrincipalType.USER) {
-        const u = await getPrisma().user.findUnique({ where: { id: principalId } });
-        if (!u) {
+        const email =
+          typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+        if (!email) {
+          res.status(400).json({ error: 'email is required for USER grants' });
+          return;
+        }
+        const matches = await getPrisma().user.findMany({
+          where: { email: { equals: email, mode: 'insensitive' } },
+          select: { id: true },
+          take: 2,
+        });
+        if (matches.length === 0) {
           res.status(404).json({ error: 'User not found' });
           return;
         }
+        if (matches.length > 1) {
+          res.status(409).json({ error: 'Multiple users match that email' });
+          return;
+        }
+        principalId = matches[0].id;
       } else {
+        principalId =
+          typeof req.body?.id === 'string'
+            ? req.body.id.trim()
+            : typeof req.body?.principalId === 'string'
+              ? req.body.principalId.trim()
+              : '';
+        if (!principalId) {
+          res.status(400).json({ error: 'id is required for TEAM grants' });
+          return;
+        }
         const t = await getPrisma().team.findUnique({ where: { id: principalId } });
         if (!t) {
           res.status(404).json({ error: 'Team not found' });
           return;
         }
       }
+
       const grant = await getPrisma().workspaceAccessGrant.upsert({
         where: {
           workspaceId_principalType_principalId: {
@@ -338,8 +354,8 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
       await recordActivity(
         req.params.id,
         req.user!.id,
-        'grant.upserted',
-        'grant',
+        WorkspaceActivityVerb.GrantUpserted,
+        WorkspaceActivityTargetType.Grant,
         grant.id,
         { principalType, principalId, role: grantRole }
       );
@@ -379,7 +395,13 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
         where: { id: existing.id },
         data: { role: grantRole },
       });
-      await recordActivity(req.params.id, req.user!.id, 'grant.updated', 'grant', grant.id);
+      await recordActivity(
+        req.params.id,
+        req.user!.id,
+        WorkspaceActivityVerb.GrantUpdated,
+        WorkspaceActivityTargetType.Grant,
+        grant.id
+      );
       res.json(grant);
     })
   );
@@ -404,85 +426,13 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
         return;
       }
       await getPrisma().workspaceAccessGrant.delete({ where: { id: existing.id } });
-      await recordActivity(req.params.id, req.user!.id, 'grant.removed', 'grant', existing.id);
-      res.status(204).send();
-    })
-  );
-
-  router.post(
-    '/:id/share-links',
-    asyncHandler(async (req, res) => {
-      const role = await resolveEffectiveWorkspaceRole(req.user!, req.params.id);
-      if (!roleAtLeast(role, WorkspaceRole.OWNER)) {
-        res.status(403).json({ error: 'Owner role required' });
-        return;
-      }
-      const token = crypto.randomBytes(32).toString('base64url');
-      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-      let expiresAt: Date | null = null;
-      if (req.body?.expiresInDays != null) {
-        const days = Number(req.body.expiresInDays);
-        if (!Number.isFinite(days) || days <= 0 || days > env.shareLinkMaxExpiryDays) {
-          res.status(400).json({
-            error: `expiresInDays must be between 1 and ${env.shareLinkMaxExpiryDays}`,
-          });
-          return;
-        }
-        expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-      }
-      const maxUses =
-        req.body?.maxUses != null && Number.isFinite(Number(req.body.maxUses))
-          ? Number(req.body.maxUses)
-          : null;
-      const link = await getPrisma().workspaceShareLink.create({
-        data: {
-          workspaceId: req.params.id,
-          tokenHash,
-          createdByUserId: req.user!.id,
-          expiresAt: expiresAt ?? undefined,
-          maxUses: maxUses ?? undefined,
-        },
-      });
-      await recordActivity(req.params.id, req.user!.id, 'share_link.created', 'share_link', link.id);
-      res.status(201).json({ ...link, token });
-    })
-  );
-
-  router.get(
-    '/:id/share-links',
-    asyncHandler(async (req, res) => {
-      const role = await resolveEffectiveWorkspaceRole(req.user!, req.params.id);
-      if (!roleAtLeast(role, WorkspaceRole.OWNER)) {
-        res.status(403).json({ error: 'Owner role required' });
-        return;
-      }
-      const links = await getPrisma().workspaceShareLink.findMany({
-        where: { workspaceId: req.params.id },
-        orderBy: { createdAt: 'desc' },
-      });
-      res.json(links);
-    })
-  );
-
-  router.delete(
-    '/:id/share-links/:linkId',
-    asyncHandler(async (req, res) => {
-      const role = await resolveEffectiveWorkspaceRole(req.user!, req.params.id);
-      if (!roleAtLeast(role, WorkspaceRole.OWNER)) {
-        res.status(403).json({ error: 'Owner role required' });
-        return;
-      }
-      const link = await getPrisma().workspaceShareLink.findFirst({
-        where: { id: req.params.linkId, workspaceId: req.params.id },
-      });
-      if (!link) {
-        res.status(404).json({ error: 'Share link not found' });
-        return;
-      }
-      await getPrisma().workspaceShareLink.update({
-        where: { id: link.id },
-        data: { revokedAt: new Date() },
-      });
+      await recordActivity(
+        req.params.id,
+        req.user!.id,
+        WorkspaceActivityVerb.GrantRemoved,
+        WorkspaceActivityTargetType.Grant,
+        existing.id
+      );
       res.status(204).send();
     })
   );
@@ -542,8 +492,8 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
       await recordActivity(
         req.params.id,
         req.user!.id,
-        'environment.shared',
-        'environment',
+        WorkspaceActivityVerb.EnvironmentShared,
+        WorkspaceActivityTargetType.Environment,
         envRow.id
       );
       res.status(201).json(envRow);
@@ -576,6 +526,13 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
         where: { id: existing.id },
         data,
       });
+      await recordActivity(
+        req.params.id,
+        req.user!.id,
+        WorkspaceActivityVerb.EnvironmentUpdated,
+        WorkspaceActivityTargetType.Environment,
+        envRow.id
+      );
       res.json(envRow);
     })
   );
@@ -596,6 +553,115 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
         return;
       }
       await getPrisma().sharedEnvironment.delete({ where: { id: existing.id } });
+      await recordActivity(
+        req.params.id,
+        req.user!.id,
+        WorkspaceActivityVerb.EnvironmentRemoved,
+        WorkspaceActivityTargetType.Environment,
+        existing.id
+      );
+      res.status(204).send();
+    })
+  );
+
+  router.get(
+    '/:id/resources',
+    asyncHandler(async (req, res) => {
+      const role = await resolveEffectiveWorkspaceRole(req.user!, req.params.id);
+      if (!roleAtLeast(role, WorkspaceRole.VIEWER)) {
+        res.status(403).json({ error: 'Forbidden' });
+        return;
+      }
+      const refs = await getPrisma().workspaceResourceReference.findMany({
+        where: { workspaceId: req.params.id },
+        orderBy: [{ resourceType: 'asc' }, { displayName: 'asc' }, { resourceId: 'asc' }],
+      });
+      res.json(refs);
+    })
+  );
+
+  router.post(
+    '/:id/resources',
+    asyncHandler(async (req, res) => {
+      const role = await resolveEffectiveWorkspaceRole(req.user!, req.params.id);
+      if (!roleAtLeast(role, WorkspaceRole.EDITOR)) {
+        res.status(403).json({ error: 'Editor role required' });
+        return;
+      }
+      const resourceType =
+        typeof req.body?.resourceType === 'string' ? req.body.resourceType.trim() : '';
+      const resourceId =
+        typeof req.body?.resourceId === 'string' ? req.body.resourceId.trim() : '';
+      if (!resourceType || !resourceId) {
+        res.status(400).json({ error: 'resourceType and resourceId are required' });
+        return;
+      }
+      const canonicalUrl =
+        typeof req.body?.canonicalUrl === 'string' && req.body.canonicalUrl.trim()
+          ? req.body.canonicalUrl.trim()
+          : null;
+      const displayName =
+        typeof req.body?.displayName === 'string' && req.body.displayName.trim()
+          ? req.body.displayName.trim()
+          : null;
+      try {
+        const ref = await getPrisma().workspaceResourceReference.create({
+          data: {
+            workspaceId: req.params.id,
+            resourceType,
+            resourceId,
+            canonicalUrl,
+            displayName,
+            createdByUserId: req.user!.id,
+          },
+        });
+        await recordActivity(
+          req.params.id,
+          req.user!.id,
+          WorkspaceActivityVerb.ResourceAdded,
+          WorkspaceActivityTargetType.Resource,
+          ref.id,
+          { resourceType, resourceId, displayName }
+        );
+        res.status(201).json(ref);
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          res.status(409).json({ error: 'Resource reference already exists in this workspace' });
+          return;
+        }
+        throw err;
+      }
+    })
+  );
+
+  router.delete(
+    '/:id/resources/:refId',
+    asyncHandler(async (req, res) => {
+      const role = await resolveEffectiveWorkspaceRole(req.user!, req.params.id);
+      if (!roleAtLeast(role, WorkspaceRole.EDITOR)) {
+        res.status(403).json({ error: 'Editor role required' });
+        return;
+      }
+      const existing = await getPrisma().workspaceResourceReference.findFirst({
+        where: { id: req.params.refId, workspaceId: req.params.id },
+      });
+      if (!existing) {
+        res.status(404).json({ error: 'Resource reference not found' });
+        return;
+      }
+      await getPrisma().workspaceResourceReference.delete({ where: { id: existing.id } });
+      await recordActivity(
+        req.params.id,
+        req.user!.id,
+        WorkspaceActivityVerb.ResourceRemoved,
+        WorkspaceActivityTargetType.Resource,
+        existing.id,
+        {
+          resourceType: existing.resourceType,
+          resourceId: existing.resourceId,
+          displayName: existing.displayName,
+        }
+      );
       res.status(204).send();
     })
   );

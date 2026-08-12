@@ -77,9 +77,6 @@ export CQL_STUDIO_SERVER_UI_BASE_URL=http://localhost:4200
 export CQL_STUDIO_SERVER_CORS_ORIGIN=http://localhost:4200
 export CQL_STUDIO_SERVER_SESSION_SECRET=cql-studio-development-session-secret
 export CQL_STUDIO_SERVER_DATABASE_URL=postgresql://cql_studio:password@localhost:5432/cql_studio_development
-export CQL_STUDIO_SERVER_TEAM_DEFAULT_WORKSPACE_VISIBILITY=PRIVATE
-export CQL_STUDIO_SERVER_TEAM_ALLOW_PUBLIC_WORKSPACES=true
-export CQL_STUDIO_SERVER_TEAM_SHARE_LINK_MAX_EXPIRY_DAYS=30
 ```
 
 `CQL_STUDIO_SERVER_DATABASE_URL` matches the `cql-studio-server-postgresql` service in `docker-compose.development.yml` (`cql_studio` / `password`, database `cql_studio_development` on port `5432`). OIDC test users from the blueprint include `alice`, `bob`, `charlie`, `daniel`, and `developer` (password `password` for the first four; `developer` uses password `developer`).
