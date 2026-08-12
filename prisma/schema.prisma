@@ -49,6 +49,9 @@ model User {
 
   @@unique([ssoIssuer, ssoSubject])
   @@index([email])
+  @@index([createdAt])
+  @@index([updatedAt])
+  @@index([lastLoginAt])
 }
 
 model Session {
@@ -61,6 +64,8 @@ model Session {
 
   @@index([userId])
   @@index([expiresAt])
+  @@index([createdAt])
+  @@index([updatedAt])
 }
 
 model Team {
@@ -75,6 +80,8 @@ model Team {
   memberships TeamMembership[]
 
   @@index([createdByUserId])
+  @@index([createdAt])
+  @@index([updatedAt])
 }
 
 model TeamMembership {
@@ -89,6 +96,8 @@ model TeamMembership {
 
   @@unique([teamId, userId])
   @@index([userId])
+  @@index([createdAt])
+  @@index([updatedAt])
 }
 
 model Workspace {
@@ -109,6 +118,8 @@ model Workspace {
 
   @@index([createdByUserId])
   @@index([visibility])
+  @@index([createdAt])
+  @@index([updatedAt])
 }
 
 model WorkspaceAccessGrant {
@@ -127,6 +138,8 @@ model WorkspaceAccessGrant {
   @@unique([workspaceId, principalType, principalId])
   @@index([principalType, principalId])
   @@index([workspaceId, role])
+  @@index([createdAt])
+  @@index([updatedAt])
 }
 
 model WorkspaceActivity {
@@ -145,6 +158,7 @@ model WorkspaceActivity {
   @@index([workspaceId, createdAt])
   @@index([actorUserId])
   @@index([createdAt])
+  @@index([updatedAt])
 }
 
 model SharedEnvironment {
@@ -159,6 +173,8 @@ model SharedEnvironment {
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
+  @@index([createdAt])
+  @@index([updatedAt])
 }
 
 model WorkspaceResourceReference {
@@ -177,4 +193,6 @@ model WorkspaceResourceReference {
   @@unique([workspaceId, resourceType, resourceId])
   @@index([workspaceId])
   @@index([createdByUserId])
+  @@index([createdAt])
+  @@index([updatedAt])
 }

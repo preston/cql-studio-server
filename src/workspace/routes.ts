@@ -19,7 +19,15 @@ import {
   roleAtLeast,
   uniqueSlug,
 } from './access.js';
-import { WorkspaceActivityTargetType, WorkspaceActivityVerb } from './activity.js';
+import {
+  fillActivitySeriesBuckets,
+  parseWorkspaceActivityPageQuery,
+  parseWorkspaceActivityStatsQuery,
+  WorkspaceActivityStatsInterval,
+  WorkspaceActivityStatsMetric,
+  WorkspaceActivityTargetType,
+  WorkspaceActivityVerb,
+} from './activity.js';
 
 function asyncHandler(
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void>
@@ -445,14 +453,19 @@ export function createWorkspaceRouter(env: ServerEnv): Router {
         res.status(403).json({ error: 'Forbidden' });
         return;
       }
-      const take = Math.min(Number(req.query.limit) || 50, 100);
-      const activity = await getPrisma().workspaceActivity.findMany({
-        where: { workspaceId: req.params.id },
-        include: { actor: { select: { id: true, email: true, displayName: true } } },
-        orderBy: { createdAt: 'desc' },
-        take,
-      });
-      res.json(activity);
+      const { page, pageSize, skip, sortBy, sortOrder } = parseWorkspaceActivityPageQuery(req);
+      const where = { workspaceId: req.params.id };
+      const [items, total] = await Promise.all([
+        getPrisma().workspaceActivity.findMany({
+          where,
+          include: { actor: { select: { id: true, email: true, displayName: true } } },
+          orderBy: { [sortBy]: sortOrder },
+          skip,
+          take: pageSize,
+        }),
+        getPrisma().workspaceActivity.count({ where }),
+      ]);
+      res.json({ items, total, page, pageSize, sortBy, sortOrder });
     })
   );
 
@@ -675,28 +688,201 @@ export function createActivityRouter(env: ServerEnv): Router {
   router.use(requireAuth(env));
 
   router.get(
+    '/stats',
+    asyncHandler(async (req, res) => {
+      const ids = await listAccessibleWorkspaceIds(req.user!);
+      const workspaceId =
+        typeof req.query.workspaceId === 'string' && req.query.workspaceId.trim()
+          ? req.query.workspaceId.trim()
+          : undefined;
+      if (workspaceId && !ids.includes(workspaceId)) {
+        res.status(403).json({ error: 'Forbidden' });
+        return;
+      }
+
+      const { range, interval, top, metrics, from, to } = parseWorkspaceActivityStatsQuery(req);
+      const emptyAccess = !workspaceId && ids.length === 0;
+
+      const response: {
+        range: typeof range;
+        interval: typeof interval;
+        from: string;
+        to: string;
+        series?: { bucket: string; count: number }[];
+        byActor?: {
+          actorUserId: string;
+          displayName: string | null;
+          email: string | null;
+          count: number;
+        }[];
+        byVerb?: { verb: string; count: number }[];
+      } = {
+        range,
+        interval,
+        from: from.toISOString(),
+        to: to.toISOString(),
+      };
+
+      if (emptyAccess) {
+        if (metrics.has(WorkspaceActivityStatsMetric.Series)) {
+          response.series = fillActivitySeriesBuckets([], from, to, interval);
+        }
+        if (metrics.has(WorkspaceActivityStatsMetric.ByActor)) {
+          response.byActor = [];
+        }
+        if (metrics.has(WorkspaceActivityStatsMetric.ByVerb)) {
+          response.byVerb = [];
+        }
+        res.json(response);
+        return;
+      }
+
+      const whereBase = {
+        createdAt: { gte: from, lte: to },
+        workspaceId: workspaceId ? workspaceId : { in: ids },
+      };
+
+      const tasks: Promise<void>[] = [];
+
+      if (metrics.has(WorkspaceActivityStatsMetric.Series)) {
+        tasks.push(
+          (async () => {
+            const workspaceSql = workspaceId
+              ? Prisma.sql`"workspaceId" = ${workspaceId}::uuid`
+              : Prisma.sql`"workspaceId" IN (${Prisma.join(
+                  ids.map((id) => Prisma.sql`${id}::uuid`)
+                )})`;
+            const rows =
+              interval === WorkspaceActivityStatsInterval.Week
+                ? await getPrisma().$queryRaw<{ bucket: string; count: bigint }[]>`
+                    SELECT to_char(
+                             date_trunc('week', "createdAt" AT TIME ZONE 'UTC'),
+                             'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+                           ) AS bucket,
+                           COUNT(*)::bigint AS count
+                    FROM "WorkspaceActivity"
+                    WHERE ${workspaceSql}
+                      AND "createdAt" >= ${from}
+                      AND "createdAt" <= ${to}
+                    GROUP BY 1
+                    ORDER BY 1
+                  `
+                : await getPrisma().$queryRaw<{ bucket: string; count: bigint }[]>`
+                    SELECT to_char(
+                             date_trunc('day', "createdAt" AT TIME ZONE 'UTC'),
+                             'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+                           ) AS bucket,
+                           COUNT(*)::bigint AS count
+                    FROM "WorkspaceActivity"
+                    WHERE ${workspaceSql}
+                      AND "createdAt" >= ${from}
+                      AND "createdAt" <= ${to}
+                    GROUP BY 1
+                    ORDER BY 1
+                  `;
+            response.series = fillActivitySeriesBuckets(
+              rows.map((r) => ({ bucket: new Date(r.bucket), count: Number(r.count) })),
+              from,
+              to,
+              interval
+            );
+          })()
+        );
+      }
+
+      if (metrics.has(WorkspaceActivityStatsMetric.ByActor)) {
+        tasks.push(
+          (async () => {
+            const grouped = await getPrisma().workspaceActivity.groupBy({
+              by: ['actorUserId'],
+              where: whereBase,
+              _count: { _all: true },
+              orderBy: { _count: { actorUserId: 'desc' } },
+              take: top,
+            });
+            const actorIds = grouped.map((g) => g.actorUserId);
+            const users =
+              actorIds.length === 0
+                ? []
+                : await getPrisma().user.findMany({
+                    where: { id: { in: actorIds } },
+                    select: { id: true, email: true, displayName: true },
+                  });
+            const byId = new Map(users.map((u) => [u.id, u]));
+            response.byActor = grouped.map((g) => {
+              const user = byId.get(g.actorUserId);
+              return {
+                actorUserId: g.actorUserId,
+                displayName: user?.displayName ?? null,
+                email: user?.email ?? null,
+                count: g._count._all,
+              };
+            });
+          })()
+        );
+      }
+
+      if (metrics.has(WorkspaceActivityStatsMetric.ByVerb)) {
+        tasks.push(
+          (async () => {
+            const grouped = await getPrisma().workspaceActivity.groupBy({
+              by: ['verb'],
+              where: whereBase,
+              _count: { _all: true },
+              orderBy: { _count: { verb: 'desc' } },
+            });
+            response.byVerb = grouped.map((g) => ({
+              verb: g.verb,
+              count: g._count._all,
+            }));
+          })()
+        );
+      }
+
+      await Promise.all(tasks);
+      res.json(response);
+    })
+  );
+
+  router.get(
     '/',
     asyncHandler(async (req, res) => {
       const ids = await listAccessibleWorkspaceIds(req.user!);
-      const take = Math.min(Number(req.query.limit) || 50, 100);
+      const { page, pageSize, skip, sortBy, sortOrder } = parseWorkspaceActivityPageQuery(req);
       const workspaceId =
         typeof req.query.workspaceId === 'string' ? req.query.workspaceId : undefined;
       if (workspaceId && !ids.includes(workspaceId)) {
         res.status(403).json({ error: 'Forbidden' });
         return;
       }
-      const activity = await getPrisma().workspaceActivity.findMany({
-        where: {
-          workspaceId: workspaceId ? workspaceId : { in: ids },
-        },
-        include: {
-          actor: { select: { id: true, email: true, displayName: true } },
-          workspace: { select: { id: true, name: true, slug: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take,
-      });
-      res.json(activity);
+      if (!workspaceId && ids.length === 0) {
+        res.json({
+          items: [],
+          total: 0,
+          page,
+          pageSize,
+          sortBy,
+          sortOrder,
+        });
+        return;
+      }
+      const where = {
+        workspaceId: workspaceId ? workspaceId : { in: ids },
+      };
+      const [items, total] = await Promise.all([
+        getPrisma().workspaceActivity.findMany({
+          where,
+          include: {
+            actor: { select: { id: true, email: true, displayName: true } },
+            workspace: { select: { id: true, name: true, slug: true } },
+          },
+          orderBy: { [sortBy]: sortOrder },
+          skip,
+          take: pageSize,
+        }),
+        getPrisma().workspaceActivity.count({ where }),
+      ]);
+      res.json({ items, total, page, pageSize, sortBy, sortOrder });
     })
   );
 
