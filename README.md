@@ -14,38 +14,115 @@ Express ESM server for CQL Studio backend services and MCP (Model Context Protoc
 ## Setup
 
 1. Install dependencies:
+
 ```bash
 npm install
 ```
 
-2. Copy `.env.example` to `.env` and configure:
-```bash
-cp .env.example .env
-```
+2. Export the environment variables you need (see [Configuration](#configuration)). The process reads `process.env` only — there is no `.env` file loader.
 
 3. Build the project:
+
 ```bash
 npm run build
 ```
 
 4. Start the server:
+
 ```bash
 npm start
 ```
 
 For development with auto-reload:
+
 ```bash
-npm run dev
+npm run watch
 ```
 
 ## Configuration
 
-Environment variables (in `.env`):
+Variables are read from the process environment. Defaults apply when unset.
 
-- `CQL_STUDIO_SERVER_PORT` - Server port (default: 3003)
-- `CQL_STUDIO_SERVER_NODE_ENV` - Environment mode (development/production)
-- `CQL_STUDIO_SERVER_CORS_ORIGIN` - Allowed CORS origin (default: http://localhost:4200)
-- `CQL_STUDIO_SERVER_LOG_LEVEL` - Logging level (default: info)
+Core:
+
+```bash
+export CQL_STUDIO_SERVER_PORT=3003
+export CQL_STUDIO_SERVER_NODE_ENV=development
+export CQL_STUDIO_SERVER_CORS_ORIGIN=http://localhost:4200
+export CQL_STUDIO_SERVER_LOG_LEVEL=info
+```
+
+- `CQL_STUDIO_SERVER_CORS_ORIGIN` — Allowed CORS origin. When SSO is enabled, used with credentials so the Studio UI (via `CQL_STUDIO_SERVER_BASE_URL` on the client) can send the HttpOnly session cookie.
+
+### SSO and Team / Workspace features (optional)
+
+Setting `CQL_STUDIO_SERVER_SSO_ISSUER_URL` enables OIDC login (BFF) and Team/Workspace APIs together. There is no separate feature flag. Startup fails if SSO is configured without `CQL_STUDIO_SERVER_DATABASE_URL`.
+
+Example matching the checked-in Authentik IdP in the **cql-studio** repo (`docker-compose.development.yml` + `docker/authentik/blueprints/cql-studio-oidc.yaml`). Start that stack first (Authentik may take a minute to become ready on first boot):
+
+```bash
+# From the cql-studio repository
+docker compose -f docker-compose.development.yml up -d
+```
+
+Then export these before `npm run watch` or `npm start` (Studio UI on `:4200`, this server on `:3003`, Authentik on `:9000`):
+
+```bash
+export CQL_STUDIO_SERVER_SSO_ISSUER_URL=http://localhost:9000/application/o/cql-studio/
+export CQL_STUDIO_SERVER_SSO_CLIENT_ID=cql-studio-development
+export CQL_STUDIO_SERVER_SSO_CLIENT_SECRET=cql-studio-development-secret
+export CQL_STUDIO_SERVER_SSO_REDIRECT_URL=http://localhost:3003/api/auth/callback
+export CQL_STUDIO_SERVER_SSO_SCOPES="openid profile email"
+export CQL_STUDIO_SERVER_UI_BASE_URL=http://localhost:4200
+export CQL_STUDIO_SERVER_CORS_ORIGIN=http://localhost:4200
+export CQL_STUDIO_SERVER_SESSION_SECRET=cql-studio-development-session-secret
+export CQL_STUDIO_SERVER_DATABASE_URL=postgresql://cql_studio:password@localhost:5432/cql_studio_development
+export CQL_STUDIO_SERVER_TEAM_DEFAULT_WORKSPACE_VISIBILITY=PRIVATE
+export CQL_STUDIO_SERVER_TEAM_ALLOW_PUBLIC_WORKSPACES=true
+export CQL_STUDIO_SERVER_TEAM_SHARE_LINK_MAX_EXPIRY_DAYS=30
+```
+
+`CQL_STUDIO_SERVER_DATABASE_URL` matches the `cql-studio-server-postgresql` service in `docker-compose.development.yml` (`cql_studio` / `password`, database `cql_studio_development` on port `5432`). OIDC test users from the blueprint include `alice`, `bob`, `charlie`, `daniel`, and `developer` (password `password` for the first four; `developer` uses password `developer`).
+
+#### Docker networking (Authentik in compose, server on host)
+
+The documented workflow runs **cql-studio-server on the host** (`npm run watch`) while Authentik runs in Docker with port `9000` published. In that setup, `CQL_STUDIO_SERVER_SSO_ISSUER_URL=http://localhost:9000/application/o/cql-studio/` is correct.
+
+`fetch failed` on `/api/auth/login` means the **server process** could not open a TCP connection to the issuer — not that your browser cannot open Authentik. Verify from the same runtime as the server:
+
+```bash
+curl -s http://localhost:9000/application/o/cql-studio/.well-known/openid-configuration | head
+```
+
+If **cql-studio-server runs inside Docker**, `localhost` is the server container, not your Mac. From inside any container, `curl http://localhost:9000` fails while `curl http://host.docker.internal:9000` (Docker Desktop) or `curl http://authentik-server:9000` on the compose network succeeds. Prefer running the server on the host for local SSO development; containerized server + local Authentik requires split browser vs backchannel URL configuration in Authentik.
+
+Optional rotation windows:
+
+```bash
+export CQL_STUDIO_SERVER_SESSION_SECRET_PREVIOUS=old-secret-1,old-secret-2
+export CQL_STUDIO_SERVER_SSO_CLIENT_SECRET_PREVIOUS=old-client-secret
+```
+
+Notes:
+
+- `CQL_STUDIO_SERVER_UI_BASE_URL` — Public Studio UI base URL (no trailing slash). Required when SSO is on. Used for post-login redirects (typically the same origin as `CQL_STUDIO_SERVER_CORS_ORIGIN`).
+- `CQL_STUDIO_SERVER_SSO_REDIRECT_URL` — OIDC callback on **this server** (must match the IdP client redirect URI).
+- `CQL_STUDIO_SERVER_DATABASE_URL` — PostgreSQL only. Also required in the environment for `npm run prisma:deploy` / `prisma:migrate`.
+- Schema migrations run automatically on startup when SSO is configured (`prisma migrate deploy`). Table PKs are UUIDv4 via `gen_random_uuid()`.
+
+Apply migrations manually if needed:
+
+```bash
+npm run prisma:deploy
+# or during development:
+npm run prisma:migrate
+```
+
+Team-related HTTP surface (only mounted when SSO is configured):
+
+- `GET /api/auth/session` — `{ enabled, user }` (also answers `{ enabled: false }` when SSO is off)
+- `GET /api/auth/login`, `GET /api/auth/callback`, `POST /api/auth/logout`
+- `/api/teams`, `/api/workspaces`, `/api/activity`
 
 ## Ollama Proxy
 

@@ -1,0 +1,180 @@
+// Author: Preston Lee
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TeamMemberRole {
+  ADMIN
+  MEMBER
+}
+
+enum WorkspaceVisibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum WorkspacePrincipalType {
+  USER
+  TEAM
+}
+
+enum WorkspaceRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+model User {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ssoIssuer   String
+  ssoSubject  String
+  email       String?
+  displayName String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastLoginAt DateTime?
+
+  sessions              Session[]
+  teamMemberships       TeamMembership[]
+  createdTeams          Team[]                 @relation("TeamCreatedBy")
+  createdWorkspaces     Workspace[]            @relation("WorkspaceCreatedBy")
+  grantedAccess         WorkspaceAccessGrant[] @relation("GrantGrantedBy")
+  workspaceActivity     WorkspaceActivity[]
+  createdShareLinks     WorkspaceShareLink[]
+
+  @@unique([ssoIssuer, ssoSubject])
+  @@index([email])
+}
+
+model Session {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Team {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String
+  slug            String   @unique
+  createdByUserId String   @db.Uuid
+  createdBy       User     @relation("TeamCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  memberships TeamMembership[]
+
+  @@index([createdByUserId])
+}
+
+model TeamMembership {
+  id        String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  teamId    String         @db.Uuid
+  team      Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId    String         @db.Uuid
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      TeamMemberRole @default(MEMBER)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@unique([teamId, userId])
+  @@index([userId])
+}
+
+model Workspace {
+  id              String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String
+  slug            String              @unique
+  visibility      WorkspaceVisibility @default(PRIVATE)
+  description     String?
+  createdByUserId String              @db.Uuid
+  createdBy       User                @relation("WorkspaceCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  grants             WorkspaceAccessGrant[]
+  shareLinks         WorkspaceShareLink[]
+  activity           WorkspaceActivity[]
+  sharedEnvironments SharedEnvironment[]
+
+  @@index([createdByUserId])
+  @@index([visibility])
+}
+
+model WorkspaceAccessGrant {
+  id              String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String                 @db.Uuid
+  workspace       Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  principalType   WorkspacePrincipalType
+  /// User or Team id (always a UUID)
+  principalId     String                 @db.Uuid
+  role            WorkspaceRole
+  isGuest         Boolean                @default(false)
+  grantedByUserId String?                @db.Uuid
+  grantedBy       User?                  @relation("GrantGrantedBy", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@unique([workspaceId, principalType, principalId])
+  @@index([principalType, principalId])
+  @@index([workspaceId, role])
+}
+
+model WorkspaceShareLink {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String    @db.Uuid
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tokenHash       String    @unique
+  createdByUserId String    @db.Uuid
+  createdBy       User      @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  useCount        Int       @default(0)
+  maxUses         Int?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([workspaceId])
+}
+
+model WorkspaceActivity {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actorUserId String    @db.Uuid
+  actor       User      @relation(fields: [actorUserId], references: [id], onDelete: Cascade)
+  verb        String
+  targetType  String?
+  targetId    String?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([workspaceId, createdAt])
+  @@index([actorUserId])
+  @@index([createdAt])
+}
+
+model SharedEnvironment {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  /// Addresses and non-secret header names only (JSON matching EndpointConfiguration shape without passwords)
+  config      Json
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}

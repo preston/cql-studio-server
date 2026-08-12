@@ -1,31 +1,42 @@
 {
   "name": "cql-studio-server",
-  "version": "2.1.2",
+  "version": "2.2.0",
   "description": "CQL Studio backend services and MCP tool orchestration, provided as an Express server using ESM modules",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "start": "node dist/server.js",
     "watch": "tsx watch src/server.ts",
     "clean": "rm -rf dist",
-    "test": "node --test --import tsx tests/ollama-proxy.test.ts tests/vsac-proxy.test.ts"
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "test": "node --test --import tsx tests/ollama-proxy.test.ts tests/vsac-proxy.test.ts tests/hmac-rotation.test.ts tests/ui-return-url.test.ts"
   },
   "author": "Preston Lee",
   "license": "Apache-2.0",
   "dependencies": {
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
     "cheerio": "^1.2.0",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "fast-xml-parser": "^5.10.1",
     "node-fetch": "^3.3.2",
+    "openid-client": "^6.8.5",
+    "pg": "^8.23.0",
+    "prisma": "^7.9.1",
     "rss-parser": "^3.13.0",
     "turndown": "^7.2.4"
   },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",
+    "@types/pg": "^8.21.0",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   }
