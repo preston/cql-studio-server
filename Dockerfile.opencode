@@ -1,0 +1,26 @@
+FROM node:26-bookworm-slim
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci && npm cache clean --force
+
+COPY tsconfig.json ./
+COPY prisma.config.ts ./
+COPY prisma ./prisma
+COPY src ./src
+RUN npm run build
+
+ENV PATH="/app/node_modules/.bin:${PATH}"
+ENV OPENCODE_RUNNER_PORT=4097
+ENV OPENCODE_INTERNAL_PORT=4096
+ENV OPENCODE_RUNNER_WORKSPACE_ROOT=/workspaces
+
+RUN mkdir -p /workspaces && chown -R node:node /app /workspaces
+USER node
+
+EXPOSE 4097
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:4097/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+
+CMD ["node", "dist/opencode/runner.js"]

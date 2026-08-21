@@ -6,6 +6,8 @@ Express ESM server for CQL Studio backend services and MCP (Model Context Protoc
 
 - MCP protocol implementation for tool execution
 - Ollama API proxy for browser CORS bypass (client-supplied base URL)
+- OpenCode SDK gateway with isolated per-session CQL workspaces
+- Read-only CQL Studio MCP tools for FHIR and VSAC context
 - Web search via SearXNG (no API key; proxy to your own or public instance)
 - Web content fetching and parsing
 - CORS-enabled for webapp communication
@@ -39,6 +41,125 @@ For development with auto-reload:
 npm run watch
 ```
 
+## OpenCode runner
+
+OpenCode does not run in the browser or in the public API process. CQL Studio Server owns the user session and delegates to a private runner container:
+
+```text
+Angular OpenCode tab -> CQL Studio Server :3003 -> OpenCode runner :4097
+                                                    -> OpenCode serve :4096 (container-only)
+                                                    -> Ollama /v1
+                                                    -> per-session workspace volume
+```
+
+Build and start the runner from the adjacent `cql-studio` repository:
+
+```bash
+docker compose -f docker-compose.development.yml build opencode-runner
+docker compose -f docker-compose.development.yml up -d opencode-runner
+curl http://127.0.0.1:4097/health
+```
+
+Then run this server normally with `npm run watch` or `npm start`. The development defaults match the compose file. Production deployments must replace the shared token and keep port 4097 private.
+
+```bash
+export CQL_STUDIO_SERVER_OPENCODE_RUNNER_URL=http://localhost:4097
+export CQL_STUDIO_SERVER_OPENCODE_RUNNER_TOKEN=replace-with-a-long-random-secret
+# Address used from the runner container back to this API's tool bridge:
+export CQL_STUDIO_SERVER_OPENCODE_TOOL_BRIDGE_URL=http://host.docker.internal:3003/api/opencode/tool-bridge
+```
+
+The runner accepts these environment variables:
+
+- `OPENCODE_RUNNER_TOKEN` — must equal `CQL_STUDIO_SERVER_OPENCODE_RUNNER_TOKEN`.
+- `OPENCODE_RUNNER_PORT` — public runner API inside the container; default `4097`.
+- `OPENCODE_INTERNAL_PORT` — container-only `opencode serve` port; default `4096`.
+- `OPENCODE_RUNNER_WORKSPACE_ROOT` — workspace volume root; default `/workspaces`.
+- `OPENCODE_RUNNER_REWRITE_LOCALHOST` — rewrites a browser-configured localhost Ollama host to `host.docker.internal`; default enabled.
+
+Each workspace configures OpenCode's documented `ollama` provider with
+`@ai-sdk/openai-compatible`, an Ollama `/v1` base URL, and the model selected in
+CQL Studio. The provider package is intentional: it is the adapter prescribed
+by OpenCode for Ollama's OpenAI-compatible endpoint.
+
+### Session filesystem
+
+Each browser session gets an unguessable directory under `/workspaces`:
+
+```text
+<session-id>/
+├── AGENTS.md
+├── opencode.json
+├── libraries/<active-library>.cql       # writable draft snapshot
+├── dependencies/<included-library>.cql # mode 0400, directory mode 0500
+├── .opencode/commands/*.md              # read-only CQL workflow commands
+└── .cql-studio/manifest.json            # IDs, hashes, draft flags, mappings
+```
+
+Only the active CQL file is created with filesystem write bits and participates in the review diff. Open dependencies, the manifest, OpenCode config, instructions, and command definitions are mode `0400`; OpenCode may maintain its own internal files under `.opencode`. Unsaved editor text is deliberately used for the active snapshot, and the browser's original content is retained as diff metadata. FHIR endpoint credentials, headers, VSAC credentials, and SearXNG configuration are kept only in the gateway's in-memory session record and are never written to this filesystem. The runner receives a random MCP capability with no user credentials embedded in it.
+
+OpenCode 1.18.x has an upstream inconsistency between documented granular edit-rule ordering and its tool-schema/call-time permission behavior. The generated config therefore enables the native edit category, while Unix file modes and manifest/path checks enforce the actual boundary. MCP has no write tool, dependency directories are locked, and files outside the manifest cannot be attached, validated, diffed, applied, or saved.
+
+Ending a session deletes its workspace. A runner restart ends all in-memory sessions; the workspace volume is intended for ephemeral session data, not authoritative CQL storage. Accepted changes return to the Angular editor, which translates and saves the Library through the existing FHIR workflow.
+
+### OpenCode MCP tools
+
+The local stdio MCP bridge exposes all 22 server tools as read-only operations:
+
+- CQL and context: `cql_studio_context`, `cql_validate`, `cql_library_search`, `cql_library_read`
+- FHIR and terminology: `fhir_read`, `fhir_search` (maximum 20 entries), `valueset_expand` (maximum 100 concepts), `vsac_search`, `validate_vsac`
+- Web discovery: `searxng_search`, `searxng_search_formatted`, `searxng_search_then_fetch`, `searxng_search_then_fetch_formatted`
+- Bounded web reads: `fetch_content`, `fetch_url`, `batch_fetch`, `fetch_metadata`, `fetch_feed`, `fetch_content_as_markdown`, `extract_links`, `fetch_sitemap`, `get_rate_limit_status`
+
+The server injects trusted FHIR, VSAC, and SearXNG origins from the session; the model cannot select an arbitrary service origin. Fetched URLs are DNS/IP checked, redirects are rechecked, response sizes are bounded, and loopback/private/link-local/metadata destinations are rejected. Shell and OpenCode's direct web fetch are denied. Every proposed CQL edit requires explicit diff review in the UI; `Apply & save` performs fresh server-side CQL validation followed by the existing browser translation and FHIR save gates. Two automatic repair prompts are allowed per explicit user request.
+
+### Gateway endpoints
+
+- `GET /api/opencode/health`
+- `POST /api/opencode/sessions`
+- `GET /api/opencode/sessions`
+- `GET /api/opencode/sessions/:id/state`
+- `POST /api/opencode/sessions/:id/prompt`
+- `GET /api/opencode/sessions/:id/commands`
+- `POST /api/opencode/sessions/:id/commands/:command`
+- `GET /api/opencode/sessions/:id/files`
+- `GET /api/opencode/sessions/:id/events` (SSE)
+- `GET /api/opencode/sessions/:id/messages`
+- `GET /api/opencode/sessions/:id/diff`
+- `POST /api/opencode/sessions/:id/validate`
+- `POST /api/opencode/sessions/:id/abort`
+- `POST /api/opencode/sessions/:id/permissions/:permissionId`
+- `POST|DELETE /api/opencode/sessions/:id/questions/:requestId`
+- `DELETE /api/opencode/sessions/:id`
+
+When SSO is configured, normal session endpoints require the existing HttpOnly login cookie and enforce per-user ownership. Tool-bridge endpoints use only the per-session capability and are not browser APIs.
+
+Session and production settings:
+
+- `CQL_STUDIO_SERVER_OPENCODE_SESSION_IDLE_MS` / `OPENCODE_SESSION_IDLE_MS` — idle TTL on gateway and runner; default 60 minutes.
+- `CQL_STUDIO_SERVER_OPENCODE_CLEANUP_INTERVAL_MS` / `OPENCODE_CLEANUP_INTERVAL_MS` — orphan cleanup interval; default 60 seconds.
+- `CQL_STUDIO_SERVER_OPENCODE_MAX_SESSIONS_PER_USER` — optional owner cap; `0` means unlimited.
+- `CQL_STUDIO_SERVER_OPENCODE_MAX_SESSIONS_GLOBAL` — optional process cap; `0` means unlimited.
+- `OPENCODE_PROVIDER_STALL_MS` — provider stall timeout; default 5 minutes.
+- `CQL_STUDIO_SERVER_CQL_ASSETS_DIRECTORY` or `CQL_STUDIO_SERVER_CQL_ASSETS_URL` — System/FHIR/FHIRHelpers/UCUM sources used by real compiler validation.
+
+Both processes emit structured OpenCode lifecycle, request, tool, duration, status, and error logs with credentials and capability tokens redacted. Production startup rejects the development runner token and tokens shorter than 32 bytes. Keep runner port 4097 private; only CQL Studio Server should reach it.
+
+### Tests
+
+```bash
+npm run build
+npm test
+
+# Opt-in live probes. VSAC is skipped unless its password is supplied.
+OPENCODE_LIVE_OLLAMA_URL=http://theperfect.crabdance.com:11434 \
+OPENCODE_LIVE_OLLAMA_MODEL=qwen3.8:27b-mlx \
+OPENCODE_LIVE_FHIR_URL=http://localhost:8080/fhir \
+npm run test:opencode:live
+```
+
+Set `OPENCODE_LIVE_VSAC_URL`, `OPENCODE_LIVE_VSAC_USERNAME`, and `OPENCODE_LIVE_VSAC_PASSWORD` to include the authenticated VSAC probe. The adjacent frontend repository has the mocked, deterministic browser workflow under `npm run test:e2e`.
+
 ## Configuration
 
 Variables are read from the process environment. Defaults apply when unset.
@@ -52,7 +173,7 @@ export CQL_STUDIO_SERVER_CORS_ORIGIN=http://localhost:4200
 export CQL_STUDIO_SERVER_LOG_LEVEL=info
 ```
 
-- `CQL_STUDIO_SERVER_CORS_ORIGIN` — Allowed CORS origin. When SSO is enabled, used with credentials so the Studio UI (via `CQL_STUDIO_SERVER_BASE_URL` on the client) can send the HttpOnly session cookie.
+- `CQL_STUDIO_SERVER_CORS_ORIGIN` — Allowed credentialed CORS origin. It must match the Studio UI origin even when SSO is disabled because the OpenCode fetch and EventSource clients use the same credential-capable transport in both modes.
 
 ### SSO and Team / Workspace features (optional)
 
@@ -289,4 +410,3 @@ Copyright © 2025+ Preston Lee. All rights reserved.
 ## License
 
 Released under the Apache 2.0 license.
-

@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { loadEnv } from './config/env.js';
+import { createCorsOptions } from './config/cors.js';
 import { applyPendingMigrations } from './db/migrate.js';
 import { mcpRouter } from './mcp/index.js';
 import { ollamaProxyRouter } from './ollama/proxy.js';
@@ -11,6 +12,9 @@ import { vsacFhirProxyRouter, vsacSiteProxyRouter } from './vsac/proxy.js';
 import { createAuthRouter } from './auth/routes.js';
 import { createTeamRouter } from './team/routes.js';
 import { createActivityRouter, createWorkspaceRouter } from './workspace/routes.js';
+import { createOpenCodeGateway } from './opencode/gateway.js';
+import { OpenCodeError } from './opencode/errors.js';
+import { openCodeLogger } from './opencode/logger.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -20,19 +24,24 @@ async function main(): Promise<void> {
 
   const app = express();
 
-  app.use(
-    cors({
-      origin: env.ssoConfigured ? env.corsOrigin : '*',
-      credentials: env.ssoConfigured,
-      optionsSuccessStatus: 200,
-    })
-  );
-  app.use(express.json({ limit: '2mb' }));
+  app.use(cors(createCorsOptions(env)));
+  app.use(express.json({ limit: '8mb' }));
   app.use(express.urlencoded({ extended: true }));
   app.use(cookieParser());
 
   app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    if (req.path.startsWith('/api/opencode')) {
+      const started = Date.now();
+      res.on('finish', () => openCodeLogger.info({
+        operation: 'http.request',
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        durationMs: Date.now() - started,
+      }, 'OpenCode HTTP request'));
+    } else {
+      console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    }
     next();
   });
 
@@ -48,6 +57,7 @@ async function main(): Promise<void> {
   app.use('/api/ollama', ollamaProxyRouter);
   app.use('/api/vsac/fhir', vsacFhirProxyRouter);
   app.use('/api/vsac/site', vsacSiteProxyRouter);
+  app.use('/api/opencode', createOpenCodeGateway(env));
 
   if (env.ssoConfigured) {
     app.use('/api/auth', createAuthRouter(env));
@@ -60,7 +70,12 @@ async function main(): Promise<void> {
     });
   }
 
-  app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  app.use((err: Error & { status?: number }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (err instanceof OpenCodeError) {
+      openCodeLogger.error({ operation: 'http.error', method: req.method, path: req.path, status: err.status, code: err.code }, err.message);
+      if (!res.headersSent) res.status(err.status).json(err.toBody());
+      return;
+    }
     const oauthErr = err as Error & { error?: string; error_description?: string };
     const oauthDetail =
       oauthErr.error
@@ -69,7 +84,7 @@ async function main(): Promise<void> {
     const message = oauthDetail || err?.message || 'Internal server error';
     console.error(`[Error] ${req.method} ${req.path} - ${message}`, isDev && err?.stack ? err.stack : '');
     if (!res.headersSent) {
-      res.status(oauthErr.error === 'access_denied' ? 403 : 500).json({
+      res.status(err.status ?? (oauthErr.error === 'access_denied' ? 403 : 500)).json({
         error: message,
         ...(oauthErr.error && { oauthError: oauthErr.error }),
         ...(oauthErr.error_description && { oauthErrorDescription: oauthErr.error_description }),
@@ -89,9 +104,7 @@ async function main(): Promise<void> {
     if (env.ssoConfigured) {
       console.log(`UI base URL: ${env.uiBaseUrl}`);
     }
-    console.log(
-      `CORS origin: ${env.ssoConfigured ? env.corsOrigin + ' (credentials)' : '* (allowing all origins)'}`
-    );
+    console.log(`CORS origin: ${env.corsOrigin} (credentials)`);
   });
 }
 

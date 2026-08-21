@@ -1,5 +1,8 @@
 // Author: Preston Lee
 
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+
 export interface ServerEnv {
   port: number;
   nodeEnv: string;
@@ -19,6 +22,18 @@ export interface ServerEnv {
   /** Verification order: [current, ...previous]. */
   sessionSecrets: string[];
   databaseUrl: string;
+  /** Private OpenCode runner base URL; never exposed to the browser. */
+  opencodeRunnerUrl: string;
+  /** Shared credential used only between this API and the private runner. */
+  opencodeRunnerToken: string;
+  /** URL the runner's MCP subprocess uses to call this server. */
+  opencodeToolBridgeUrl: string;
+  opencodeSessionIdleMs: number;
+  opencodeCleanupIntervalMs: number;
+  opencodeMaxSessionsPerUser: number;
+  opencodeMaxSessionsGlobal: number;
+  cqlAssetsDirectory?: string;
+  cqlAssetsUrl: string;
 }
 
 function requiredWhenSso(name: string, value: string | undefined, ssoOn: boolean): string {
@@ -44,6 +59,12 @@ function parseSecretList(raw: string | undefined): string[] {
     out.push(secret);
   }
   return out;
+}
+
+function nonNegativeInteger(name: string, raw: string | undefined, fallback: number): number {
+  const value = raw == null || raw.trim() === '' ? fallback : Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer`);
+  return value;
 }
 
 export function loadEnv(): ServerEnv {
@@ -90,8 +111,17 @@ export function loadEnv(): ServerEnv {
     );
   }
 
+  const port = Number.parseInt(process.env.CQL_STUDIO_SERVER_PORT || '3003', 10);
+  const defaultRunnerToken = 'cql-studio-opencode-development-only';
+  const opencodeRunnerToken = process.env.CQL_STUDIO_SERVER_OPENCODE_RUNNER_TOKEN?.trim() || defaultRunnerToken;
+  if (nodeEnv !== 'development' && (opencodeRunnerToken === defaultRunnerToken || Buffer.byteLength(opencodeRunnerToken) < 32)) {
+    throw new Error('CQL_STUDIO_SERVER_OPENCODE_RUNNER_TOKEN must be a non-default secret of at least 32 bytes in production');
+  }
+  const siblingAssets = path.resolve(process.cwd(), '../cql-studio/public/cql');
+  const configuredAssetsDirectory = process.env.CQL_STUDIO_SERVER_CQL_ASSETS_DIRECTORY?.trim();
+  const cqlAssetsDirectory = configuredAssetsDirectory || (existsSync(siblingAssets) ? siblingAssets : undefined);
   return {
-    port: Number.parseInt(process.env.CQL_STUDIO_SERVER_PORT || '3003', 10),
+    port,
     nodeEnv,
     corsOrigin,
     uiBaseUrl,
@@ -113,5 +143,35 @@ export function loadEnv(): ServerEnv {
     sessionSecret,
     sessionSecrets: sessionSecret ? [sessionSecret, ...previousSessionSecrets] : [],
     databaseUrl,
+    opencodeRunnerUrl:
+      process.env.CQL_STUDIO_SERVER_OPENCODE_RUNNER_URL?.trim().replace(/\/+$/, '') ||
+      'http://localhost:4097',
+    opencodeRunnerToken,
+    opencodeToolBridgeUrl:
+      process.env.CQL_STUDIO_SERVER_OPENCODE_TOOL_BRIDGE_URL?.trim().replace(/\/+$/, '') ||
+      `http://host.docker.internal:${port}/api/opencode/tool-bridge`,
+    opencodeSessionIdleMs: nonNegativeInteger(
+      'CQL_STUDIO_SERVER_OPENCODE_SESSION_IDLE_MS',
+      process.env.CQL_STUDIO_SERVER_OPENCODE_SESSION_IDLE_MS,
+      60 * 60 * 1000
+    ),
+    opencodeCleanupIntervalMs: nonNegativeInteger(
+      'CQL_STUDIO_SERVER_OPENCODE_CLEANUP_INTERVAL_MS',
+      process.env.CQL_STUDIO_SERVER_OPENCODE_CLEANUP_INTERVAL_MS,
+      60_000
+    ),
+    opencodeMaxSessionsPerUser: nonNegativeInteger(
+      'CQL_STUDIO_SERVER_OPENCODE_MAX_SESSIONS_PER_USER',
+      process.env.CQL_STUDIO_SERVER_OPENCODE_MAX_SESSIONS_PER_USER,
+      0
+    ),
+    opencodeMaxSessionsGlobal: nonNegativeInteger(
+      'CQL_STUDIO_SERVER_OPENCODE_MAX_SESSIONS_GLOBAL',
+      process.env.CQL_STUDIO_SERVER_OPENCODE_MAX_SESSIONS_GLOBAL,
+      0
+    ),
+    cqlAssetsDirectory,
+    cqlAssetsUrl:
+      process.env.CQL_STUDIO_SERVER_CQL_ASSETS_URL?.trim().replace(/\/+$/, '') || `${uiBaseUrl}/cql`,
   };
 }
